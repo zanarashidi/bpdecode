@@ -1,0 +1,22 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+.pytest_cache/
+.ruff_cache/
+build/
+dist/
+
+# C++/CUDA
+/build-cpp/
+*.o
+*.so
+compile_commands.json
+CMakeCache.txt
+CMakeFiles/
+
+# editors / OS
+.DS_Store
+.vscode/
+.idea/
