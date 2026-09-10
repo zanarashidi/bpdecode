@@ -213,11 +213,17 @@ CUDA kernels -- written, run only on GPU CI (`.github/workflows/gpu.yml`,
 Also this phase: regex parser gained `{m,n}` counted repetition;
 `Vocabulary.from_hf` now sizes to `len(tok)` (covers the EOS / added tokens).
 
-### Phase 5 -- perf hardening & release
+### Phase 5 -- perf hardening & release *(in progress)*
 
-- stream overlap with forward pass, persistent kernel, Nsight tuning
-- multi-GPU (shard by request -- state is tiny)
-- docs, examples, `cibuildwheel` wheels, benchmark report
+- [x] examples: `examples/generate_hf.py` (regex + JSON Schema constrained HF
+      generation), `examples/serve_batch.py` (continuous-batching loop).
+- [ ] README refresh + a "how it works" doc.
+- [ ] `cibuildwheel` wheels (CPU + CUDA variants) / sdist.
+- [ ] consolidated benchmark report (`bench/RESULTS.md` is the raw material).
+- [ ] **GPU (pod):** rerun all benches `--device cuda`; kernel stream overlap
+      (drop the `cudaStreamSynchronize`, overlap the mask with the forward
+      pass); persistent constraint kernel; Nsight tuning.
+- [ ] multi-GPU (shard by request -- state is tiny).
 
 ## Key risks
 
