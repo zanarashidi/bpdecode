@@ -73,7 +73,9 @@ class FsaTensors:
             num_symbols=fsa.num_symbols,
             dead=fsa.dead,
             offsets=torch.tensor(toks.offsets, dtype=torch.int32),
-            symbols=torch.tensor(toks.symbols or [0], dtype=torch.int32),
+            symbols=torch.frombuffer(
+                bytearray(toks.symbols or b"\x00"), dtype=torch.uint8
+            ).to(torch.int32),
             eos_id=toks.eos_id,
             start=fsa.start,
             accepting=frozenset(i for i, a in enumerate(fsa.accept) if a),

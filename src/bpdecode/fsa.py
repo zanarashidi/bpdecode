@@ -53,17 +53,18 @@ class FsaTable:
 
 @dataclass
 class TokenSymbols:
-    """Token id -> the symbol-class ids its code points drive through the FSA.
+    """Token id -> the symbol-class id each of its bytes drives through the FSA.
 
-    Ragged: token ``t`` occupies ``symbols[offsets[t]:offsets[t + 1]]``.  A byte
-    outside every class is stored as ``-1``; the scalar ``step`` treats such a
-    token as never allowed.
+    Ragged: token ``t`` occupies ``symbols[offsets[t]:offsets[t + 1]]``.  The
+    byte alphabet is fully partitioned, so every byte maps to a real class
+    (0..``num_symbols`` - 1) -- ``symbols`` is a ``bytes`` and iterating or
+    indexing it yields those class ids.
     """
 
     vocab_size: int
     eos_id: int
     offsets: list[int] = field(default_factory=lambda: [0])
-    symbols: list[int] = field(default_factory=list)
+    symbols: bytes = b""
 
 
 def build_reachability(
@@ -131,17 +132,23 @@ def fsa_from_dfa(dfa: DFA) -> FsaTable:
 
 def token_symbols(dfa: DFA, vocab: Vocabulary) -> TokenSymbols:
     """Map every token id to the sequence of :class:`DFA` symbol classes its
-    raw bytes select.  A byte outside every class becomes ``-1``.
+    raw bytes select.
+
+    The byte alphabet (0..255) is fully partitioned into ``len(dfa.symbols)``
+    classes, so ``symbol_of`` never returns -1 here; a 256-entry table plus
+    :meth:`bytes.translate` maps each token in C.
     """
+    lut = bytes(dfa.symbol_of(b) for b in range(256))
     offsets = [0]
-    syms: list[int] = []
+    total = 0
+    parts: list[bytes] = []
     for tb in vocab.token_bytes:
-        for byte in tb:
-            syms.append(dfa.symbol_of(byte))
-        offsets.append(len(syms))
+        parts.append(tb.translate(lut))
+        total += len(tb)
+        offsets.append(total)
     eos = vocab.eos_id if vocab.eos_id is not None else -1
     return TokenSymbols(
-        vocab_size=vocab.size, eos_id=eos, offsets=offsets, symbols=syms
+        vocab_size=vocab.size, eos_id=eos, offsets=offsets, symbols=b"".join(parts)
     )
 
 
