@@ -73,31 +73,44 @@ void apply_mask_batch(const FsaTable& fsa, const TokenSymbols& toks,
                       float neg_inf);
 
 #ifdef BPDECODE_WITH_CUDA
-// Phase 1: same contract, device pointers. Declared now so callers can compile
-// against the final ABI.
-void compute_mask_batch_cuda(const FsaTable& fsa_device,
-                             const TokenSymbols& toks_device,
-                             const int32_t* states_device, int32_t batch,
-                             uint32_t* out_bits_device, void* stream);
+// Device path. Same semantics as the host functions above, but every array is
+// a raw device pointer -- the SoA / CSR form the caller uploads once and keeps
+// (there is no std::vector on the device). `stream` is a cudaStream_t.
+//
+//   trans    [num_states * num_symbols]  int32
+//   accept   [num_states]                uint8
+//   live     [num_states]                uint8   (written by build_reachability)
+//   offsets  [vocab_size + 1]            int32
+//   symbols  [offsets[vocab_size]]       int32
 
-// Iterative boolean-BP reachability on device. `trans`/`accept` are device
-// pointers of length num_states*num_symbols / num_states; `live_device` (length
-// num_states) is written. Runs live[s] |= OR(live[succ]) to a fixpoint.
+// live[s] |= OR(live[succ]) to a fixpoint.
 void build_reachability_cuda(int32_t num_states, int32_t num_symbols,
-                             const int32_t* trans_device,
-                             const uint8_t* accept_device,
-                             uint8_t* live_device, void* stream);
+                             const int32_t* trans, const uint8_t* accept,
+                             uint8_t* live, void* stream);
 
-void advance_state_batch_cuda(const FsaTable& fsa_device,
-                              const TokenSymbols& toks_device,
-                              const int32_t* states_device,
-                              const int32_t* token_ids_device, int32_t batch,
-                              int32_t* next_states_device, void* stream);
+void compute_mask_batch_cuda(int32_t num_states, int32_t num_symbols,
+                             const int32_t* trans, const uint8_t* accept,
+                             const uint8_t* live, int32_t dead,
+                             const int32_t* offsets, const int32_t* symbols,
+                             int32_t vocab_size, int32_t eos_id,
+                             const int32_t* states, int32_t batch,
+                             uint32_t* out_bits, void* stream);
 
-void apply_mask_batch_cuda(const FsaTable& fsa_device,
-                           const TokenSymbols& toks_device,
-                           const int32_t* states_device, int32_t batch,
-                           float* logits_device, float neg_inf, void* stream);
+void advance_state_batch_cuda(int32_t num_states, int32_t num_symbols,
+                              const int32_t* trans, const uint8_t* accept,
+                              const uint8_t* live, int32_t dead,
+                              const int32_t* offsets, const int32_t* symbols,
+                              int32_t vocab_size, int32_t eos_id,
+                              const int32_t* states, const int32_t* token_ids,
+                              int32_t batch, int32_t* next_states, void* stream);
+
+void apply_mask_batch_cuda(int32_t num_states, int32_t num_symbols,
+                           const int32_t* trans, const uint8_t* accept,
+                           const uint8_t* live, int32_t dead,
+                           const int32_t* offsets, const int32_t* symbols,
+                           int32_t vocab_size, int32_t eos_id,
+                           const int32_t* states, int32_t batch, float* logits,
+                           float neg_inf, void* stream);
 #endif
 
 }  // namespace bpdecode

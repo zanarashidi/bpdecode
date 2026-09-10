@@ -19,7 +19,18 @@ jobs:
         with:
           python-version: ${{ matrix.python }}
       - run: python -m pip install --upgrade pip
-      - run: pip install -e '.[dev]'
+      - name: Install CPU torch
+        shell: bash
+        run: |
+          if [ "$RUNNER_OS" = "Linux" ]; then
+            pip install torch --index-url https://download.pytorch.org/whl/cpu
+          else
+            pip install torch
+          fi
+      - name: Build + install (scikit-build-core compiles csrc + the torch op)
+        run: |
+          pip install scikit-build-core cmake ninja
+          pip install --no-build-isolation -e '.[dev]'
       - run: ruff check .
       - run: pytest
 

@@ -31,12 +31,15 @@ src/bpdecode/     host front-end (Python): regex/PDA compilers, TokenDFA,
                   Constraint interface, CPU reference (correctness oracle)
   regex/utf8.py               code-point range -> UTF-8 byte automaton
   fsa.py                      DFA + Vocabulary -> FsaTable/TokenSymbols export
-                              (+ scalar step/compute_mask mirror of the C++ core)
+                              (+ scalar mirrors of the C++ core)
+  ops.py                      torch.ops.bpdecode.* wrappers (FsaTensors bundle)
 csrc/             C++/CUDA core: FsaTable/TokenSymbols ABI, mask kernels
   include/bpdecode/mask.hpp    the ABI callers compile against
   src/mask_cpu.cpp             scalar reference + build_reachability
   src/mask_cuda.cu             batched kernels (warp/request, __ballot_sync)
-bindings/         torch custom op + HF / vLLM LogitsProcessor adapters (Phase 2)
+bindings/torch_ops.cpp       ATen glue -> torch.ops.bpdecode.* (CPU + CUDA)
+CMakeLists.txt    top-level build (scikit-build-core): csrc core + torch op
+bindings/         HF / vLLM LogitsProcessor adapters (Phase 2)
 bench/            throughput / TTFT / per-token overhead vs Outlines, XGrammar
 tests/            differential tests vs the CPU reference; fuzzing
 ```
@@ -65,9 +68,9 @@ tests/            differential tests vs the CPU reference; fuzzing
 - [x] CPU reference `RegexConstraint` + brute-force differential tests
 - [x] C++ ABI (`FsaTable`, `TokenSymbols`) + scalar `compute_mask*` + gtests
 
-### Phase 1 -- FSA path, single request, GPU mask *(in progress)*
+### Phase 1 -- FSA path, single request, GPU mask *(code complete; CUDA run pending)*
 
-Done -- host side, runs without a GPU:
+Host side -- runs without a GPU, covered by `pytest` + gtests:
 
 - [x] byte-DFA x tokenizer product: the whole pipeline is on raw bytes. Regex
       `CharSet`s are lowered to their UTF-8 byte automaton (`regex/utf8.py`,
@@ -76,23 +79,27 @@ Done -- host side, runs without a GPU:
       tokens from byte-level BPE resolve correctly. No more `surrogateescape`.
 - [x] host FSA export: `bpdecode.fsa` flattens a compiled DFA + `Vocabulary`
       into `FsaTable` / `TokenSymbols` (the `csrc` ABI, POD arrays ready for
-      CSR upload) plus a scalar `step` / `compute_mask` mirror of
-      `mask_cpu.cpp`, differential-tested against `TokenDFA`.
+      CSR upload) plus scalar `step` / `compute_mask` / `advance_state_batch` /
+      `apply_mask` mirrors of `mask_cpu.cpp`, differential-tested vs `TokenDFA`.
 - [x] `build_reachability` ported to C++ (`mask_cpu.cpp`): boolean-BP backward
       reachability, so `FsaTable.live` is computed, not supplied. gtests.
+- [x] `advance_state_batch` + fused `apply_mask_batch` (C++ scalar + gtests).
+- [x] scikit-build-core builds `csrc` + the torch op library into the wheel;
+      `torch.ops.bpdecode.{build_reachability,compute_mask,apply_mask_,advance_state}`
+      via `bpdecode.ops` (`FsaTensors` bundle). CPU path differential-tested in
+      `tests/test_ops.py`; CUDA path dispatched by tensor device.
 
-Written, not yet exercised (no local GPU -- needs GPU CI):
+CUDA kernels -- written, run only on GPU CI (`.github/workflows/gpu.yml`,
+`scripts/gpu_check.sh`); `tests/test_cuda.py` is the CUDA-vs-CPU differential:
 
 - [x] `compute_mask_batch_cuda`: one warp per request, `__ballot_sync` packs
-      32 token verdicts per word, caller-supplied stream.
+      32 token verdicts per word.
+- [x] `advance_state_batch_cuda` (thread/request); `apply_mask_batch_cuda`
+      (warp/request, fused, no bitset round-trip).
 - [x] `build_reachability_cuda`: iterative `live |= OR(succ)` fixpoint.
-
-Still to do:
-
-- [ ] `advance_state` kernel; fused `apply_mask` (Triton/CUDA)
-- [ ] scikit-build-core: compile `csrc` into the wheel; `torch.ops.bpdecode.*`
-- [ ] correctness: run the CUDA path vs the CPU reference over a regex suite
-      on GPU CI; wire an nvbench microbench
+- [ ] **run `scripts/gpu_check.sh` once on a real GPU** to close Phase 1
+      (differential + `compute-sanitizer`).
+- [ ] nvbench microbench (deferred to Phase 5 perf work).
 
 ### Phase 2 -- batching + serving integration
 

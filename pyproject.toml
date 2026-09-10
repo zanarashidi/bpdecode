@@ -1,6 +1,6 @@
 [build-system]
-requires = ["hatchling"]
-build-backend = "hatchling.build"
+requires = ["scikit-build-core>=0.10", "torch>=2.2", "cmake>=3.24", "ninja"]
+build-backend = "scikit_build_core.build"
 
 [project]
 name = "bpdecode"
@@ -16,15 +16,17 @@ classifiers = [
     "Programming Language :: Python :: 3",
     "Topic :: Scientific/Engineering :: Artificial Intelligence",
 ]
-dependencies = []
+dependencies = ["torch>=2.2"]
 
 [project.optional-dependencies]
 hf = ["transformers>=4.40", "tokenizers>=0.19"]
-torch = ["torch>=2.2"]
-dev = ["pytest>=8", "ruff>=0.6"]
+dev = ["pytest>=8", "ruff>=0.6", "numpy"]
 
-[tool.hatch.build.targets.wheel]
-packages = ["src/bpdecode"]
+[tool.scikit-build]
+wheel.packages = ["src/bpdecode"]
+minimum-version = "build-system.requires"
+build-dir = "build/{wheel_tag}"
+editable.mode = "redirect"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

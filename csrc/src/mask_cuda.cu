@@ -3,12 +3,11 @@
 // Layout / modernization choices (see docs/PLAN.md):
 //   * one warp per request, lanes stride over the vocab
 //   * __ballot_sync packs 32 token verdicts into one uint32 mask word
-//   * transition table read straight from (managed) global memory as SoA
+//   * transition table read straight from global memory as SoA / CSR
 //   * caller-supplied stream so the mask compute overlaps the model forward pass
 //
-// The FsaTable / TokenSymbols passed here hold pointers that must be
-// device-accessible (cudaMallocManaged in the tests / upload path). Only the
-// scalar POD fields and the array contents are touched from the device.
+// Every array argument is a raw device pointer -- the SoA form the caller
+// uploads once and keeps. See the CUDA section of mask.hpp for the layouts.
 #include "bpdecode/mask.hpp"
 
 #include <cstdio>
@@ -141,11 +140,10 @@ inline void check(cudaError_t e, const char* what) {
 }  // namespace
 
 void build_reachability_cuda(int32_t num_states, int32_t num_symbols,
-                             const int32_t* trans_device,
-                             const uint8_t* accept_device, uint8_t* live_device,
-                             void* stream) {
+                             const int32_t* trans, const uint8_t* accept,
+                             uint8_t* live, void* stream) {
   auto s = static_cast<cudaStream_t>(stream);
-  check(cudaMemsetAsync(live_device, 0, static_cast<size_t>(num_states), s),
+  check(cudaMemsetAsync(live, 0, static_cast<size_t>(num_states), s),
         "memset live");
 
   int32_t* changed = nullptr;
@@ -157,9 +155,8 @@ void build_reachability_cuda(int32_t num_states, int32_t num_symbols,
   // Bounded by the automaton diameter; num_states is a safe hard cap.
   for (int32_t iter = 0; iter < num_states && host_changed; ++iter) {
     check(cudaMemsetAsync(changed, 0, sizeof(int32_t), s), "reset flag");
-    reachability_step_kernel<<<grid, block, 0, s>>>(
-        num_states, num_symbols, trans_device, accept_device, live_device,
-        changed);
+    reachability_step_kernel<<<grid, block, 0, s>>>(num_states, num_symbols,
+                                                    trans, accept, live, changed);
     check(cudaMemcpyAsync(&host_changed, changed, sizeof(int32_t),
                           cudaMemcpyDeviceToHost, s),
           "copy flag");
@@ -168,37 +165,15 @@ void build_reachability_cuda(int32_t num_states, int32_t num_symbols,
   check(cudaFreeAsync(changed, s), "free flag");
 }
 
-void advance_state_batch_cuda(const FsaTable& fsa, const TokenSymbols& toks,
-                              const int32_t* states, const int32_t* token_ids,
-                              int32_t batch, int32_t* next_states, void* stream) {
-  if (batch <= 0) return;
-  auto s = static_cast<cudaStream_t>(stream);
-  const int32_t block = 128;
-  const int32_t grid = (batch + block - 1) / block;
-  advance_state_kernel<<<grid, block, 0, s>>>(
-      fsa.trans.data(), fsa.num_symbols, fsa.num_states, fsa.accept.data(),
-      fsa.live.data(), fsa.dead, toks.offsets.data(), toks.symbols.data(),
-      toks.eos_id, states, token_ids, batch, next_states);
-  check(cudaStreamSynchronize(s), "sync");
-}
-
-void apply_mask_batch_cuda(const FsaTable& fsa, const TokenSymbols& toks,
-                           const int32_t* states, int32_t batch, float* logits,
-                           float neg_inf, void* stream) {
-  if (batch <= 0) return;
-  auto s = static_cast<cudaStream_t>(stream);
-  apply_mask_kernel<<<batch, kWarp, 0, s>>>(
-      fsa.trans.data(), fsa.num_symbols, fsa.num_states, fsa.accept.data(),
-      fsa.live.data(), fsa.dead, toks.offsets.data(), toks.symbols.data(),
-      toks.vocab_size, toks.eos_id, states, logits, neg_inf);
-  check(cudaStreamSynchronize(s), "sync");
-}
-
-void compute_mask_batch_cuda(const FsaTable& fsa, const TokenSymbols& toks,
+void compute_mask_batch_cuda(int32_t num_states, int32_t num_symbols,
+                             const int32_t* trans, const uint8_t* accept,
+                             const uint8_t* live, int32_t dead,
+                             const int32_t* offsets, const int32_t* symbols,
+                             int32_t vocab_size, int32_t eos_id,
                              const int32_t* states, int32_t batch,
                              uint32_t* out_bits, void* stream) {
   if (batch <= 0) return;
-  const int32_t words_per_row = (toks.vocab_size + 31) / 32;
+  const int32_t words_per_row = (vocab_size + 31) / 32;
   auto s = static_cast<cudaStream_t>(stream);
 
   check(cudaMemsetAsync(out_bits, 0,
@@ -207,9 +182,41 @@ void compute_mask_batch_cuda(const FsaTable& fsa, const TokenSymbols& toks,
                         s),
         "memset mask");
   compute_mask_kernel<<<batch, kWarp, 0, s>>>(
-      fsa.trans.data(), fsa.num_symbols, fsa.num_states, fsa.accept.data(),
-      fsa.live.data(), fsa.dead, toks.offsets.data(), toks.symbols.data(),
-      toks.vocab_size, toks.eos_id, states, out_bits, words_per_row);
+      trans, num_symbols, num_states, accept, live, dead, offsets, symbols,
+      vocab_size, eos_id, states, out_bits, words_per_row);
+  check(cudaStreamSynchronize(s), "sync");
+}
+
+void advance_state_batch_cuda(int32_t num_states, int32_t num_symbols,
+                              const int32_t* trans, const uint8_t* accept,
+                              const uint8_t* live, int32_t dead,
+                              const int32_t* offsets, const int32_t* symbols,
+                              int32_t vocab_size, int32_t eos_id,
+                              const int32_t* states, const int32_t* token_ids,
+                              int32_t batch, int32_t* next_states, void* stream) {
+  if (batch <= 0) return;
+  (void)vocab_size;
+  auto s = static_cast<cudaStream_t>(stream);
+  const int32_t block = 128;
+  const int32_t grid = (batch + block - 1) / block;
+  advance_state_kernel<<<grid, block, 0, s>>>(
+      trans, num_symbols, num_states, accept, live, dead, offsets, symbols,
+      eos_id, states, token_ids, batch, next_states);
+  check(cudaStreamSynchronize(s), "sync");
+}
+
+void apply_mask_batch_cuda(int32_t num_states, int32_t num_symbols,
+                           const int32_t* trans, const uint8_t* accept,
+                           const uint8_t* live, int32_t dead,
+                           const int32_t* offsets, const int32_t* symbols,
+                           int32_t vocab_size, int32_t eos_id,
+                           const int32_t* states, int32_t batch, float* logits,
+                           float neg_inf, void* stream) {
+  if (batch <= 0) return;
+  auto s = static_cast<cudaStream_t>(stream);
+  apply_mask_kernel<<<batch, kWarp, 0, s>>>(
+      trans, num_symbols, num_states, accept, live, dead, offsets, symbols,
+      vocab_size, eos_id, states, logits, neg_inf);
   check(cudaStreamSynchronize(s), "sync");
 }
 

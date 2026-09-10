@@ -1,0 +1,43 @@
+name: gpu
+
+# Manual, opt-in: validates the CUDA kernels against the CPU reference on real
+# hardware. Needs a self-hosted runner labelled `gpu` with an NVIDIA GPU, the
+# CUDA toolkit (nvcc) on PATH, and Python 3.10+. Trigger from the Actions tab.
+#
+# The same checks run standalone via `scripts/gpu_check.sh` on any GPU box.
+
+on:
+  workflow_dispatch:
+
+jobs:
+  cuda-differential:
+    runs-on: [self-hosted, gpu]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: GPU / toolkit info
+        run: |
+          nvidia-smi
+          nvcc --version
+
+      - name: Build csrc with CUDA + run C++ tests
+        run: |
+          cmake -S csrc -B build-cpp -DCMAKE_BUILD_TYPE=Release
+          cmake --build build-cpp -j
+          ctest --test-dir build-cpp --output-on-failure
+
+      - name: Install CUDA torch + build the extension (CUDA path)
+        run: |
+          python -m pip install --upgrade pip
+          pip install torch --index-url https://download.pytorch.org/whl/cu124
+          pip install scikit-build-core cmake ninja
+          CMAKE_ARGS="-DCMAKE_CUDA_ARCHITECTURES=native" \
+            pip install --no-build-isolation -e '.[dev]'
+
+      - name: CUDA vs CPU differential
+        run: pytest tests/test_cuda.py -v
+
+      - name: compute-sanitizer (memcheck) on the differential
+        run: |
+          compute-sanitizer --tool memcheck --error-exitcode 1 \
+            python -m pytest tests/test_cuda.py -q
