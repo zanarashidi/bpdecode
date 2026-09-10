@@ -41,6 +41,8 @@ class FsaTensors:
     offsets: torch.Tensor  # int32 [vocab_size + 1]
     symbols: torch.Tensor  # int32 [offsets[-1]]
     eos_id: int
+    start: int = 0
+    accepting: frozenset[int] = frozenset()
 
     @property
     def device(self) -> torch.device:
@@ -56,6 +58,8 @@ class FsaTensors:
             self.offsets.to(device),
             self.symbols.to(device),
             self.eos_id,
+            self.start,
+            self.accepting,
         )
 
     @classmethod
@@ -69,6 +73,8 @@ class FsaTensors:
             offsets=torch.tensor(toks.offsets, dtype=torch.int32),
             symbols=torch.tensor(toks.symbols or [0], dtype=torch.int32),
             eos_id=toks.eos_id,
+            start=fsa.start,
+            accepting=frozenset(i for i, a in enumerate(fsa.accept) if a),
         )
 
     @classmethod

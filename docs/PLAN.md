@@ -104,13 +104,19 @@ CUDA kernels -- written, run only on GPU CI (`.github/workflows/gpu.yml`,
 - [x] validated on an RTX 3090 -- differential + `compute-sanitizer` clean.
 - [ ] nvbench microbench (deferred to Phase 5 perf work).
 
-### Phase 2 -- batching + serving integration
+### Phase 2 -- batching + serving integration *(in progress)*
 
-- batched state array, shared compiled DFA across identical grammars
-- continuous-batching add / evict / reset
-- device-side adaptive mask cache (context-independent masks, LRU)
-- HF + vLLM `LogitsProcessor` adapters; end-to-end generation demo
-- benchmark vs Outlines
+- [x] batched state array + continuous-batching lifecycle: `bpdecode.batch`
+      (`ConstraintBatch` -- one int32 state per slot, `add`/`evict`/`reset`,
+      whole-batch `apply_mask` / `commit` in one op call each).
+- [x] shared compiled DFA across identical grammars: `GrammarCache` (LRU,
+      pattern string -> one shared `FsaTensors`).
+- [x] HF `LogitsProcessor` adapter: `bpdecode.hf.RegexLogitsProcessor`
+      (per-row state, advances on the sampled token; greedy + sampling).
+- [ ] device-side adaptive mask cache (context-independent masks, LRU) --
+      mask depends only on the DFA state, so cache `state -> mask row`.
+- [ ] vLLM adapter (its logits-processor plugin API); end-to-end demo.
+- [ ] benchmark vs Outlines (tokens/s, per-token mask overhead).
 
 ### Phase 3 -- CFG / pushdown (JSON Schema, GBNF)
 
