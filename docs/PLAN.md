@@ -56,7 +56,8 @@ tests/            differential tests vs the CPU reference; fuzzing
 - [x] repo, packaging, CI, C++/CMake tree (CUDA optional)
 - [x] regex -> code-point DFA (Thompson + subset construction)
 - [x] token-level automaton (`TokenDFA`): lazy memoised `step` / `allowed` / `mask`
-- [x] `Vocabulary` loading (`from_tokens`, `from_hf` for GPT-2 byte-level BPE)
+- [x] `Vocabulary` loading (`from_tokens`, `from_hf`; default model
+      `Qwen/Qwen2.5-0.5B` -- GPT-2-style byte-level BPE, runs on a laptop)
 - [x] `Constraint` interface + HF `LogitsProcessor` shim
 - [x] CPU reference `RegexConstraint` + brute-force differential tests
 - [x] C++ ABI (`FsaTable`, `TokenSymbols`) + scalar `compute_mask*` + gtests

@@ -10,12 +10,18 @@ automaton consumes.  Phase 0 keeps this deliberately small:
   (byte-level BPE, partial UTF-8, added tokens); the implementation here
   handles the common GPT-2 byte-level case and falls back to ``decode`` with a
   logged caveat.  Getting this fully right is tracked for Phase 1.
+
+``from_hf`` defaults to :data:`DEFAULT_MODEL` (``Qwen/Qwen2.5-0.5B``), a small
+GPT-2-style byte-level BPE tokenizer that runs comfortably on a laptop.
 """
 
 from __future__ import annotations
 
 import warnings
 from dataclasses import dataclass
+
+DEFAULT_MODEL = "Qwen/Qwen2.5-0.5B"
+"""Default HF model whose tokenizer :meth:`Vocabulary.from_hf` loads."""
 
 
 @dataclass(frozen=True)
@@ -43,7 +49,7 @@ class Vocabulary:
         return cls(token_bytes=tb, eos_id=eos_id)
 
     @classmethod
-    def from_hf(cls, tokenizer_or_name: object) -> Vocabulary:
+    def from_hf(cls, tokenizer_or_name: object = DEFAULT_MODEL) -> Vocabulary:
         try:
             from transformers import AutoTokenizer  # type: ignore
         except ImportError as exc:  # pragma: no cover - optional dependency

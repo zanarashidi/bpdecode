@@ -12,13 +12,14 @@ from .automaton import TokenDFA
 from .interface import BaseConstraint, Constraint
 from .reference import RegexConstraint
 from .regex import DFA, RegexSyntaxError, compile_regex
-from .tokenizer import Vocabulary
+from .tokenizer import DEFAULT_MODEL, Vocabulary
 
 __version__ = "0.0.0"
 
 __all__ = [
     "BaseConstraint",
     "Constraint",
+    "DEFAULT_MODEL",
     "DFA",
     "RegexConstraint",
     "RegexSyntaxError",
