@@ -16,7 +16,7 @@ Implemented so far -- **host side only, no CUDA yet**:
 
 | Piece | Module | Notes |
 |---|---|---|
-| regex -> code-point DFA | `bpdecode.regex` | Thompson NFA + subset construction; symbol-class transitions |
+| regex -> byte DFA | `bpdecode.regex` | Thompson NFA + subset construction; code-point classes lowered to a UTF-8 byte automaton |
 | token-level automaton | `bpdecode.automaton` | lazy, memoised `step` / `allowed` / `mask` over a `Vocabulary` |
 | vocabulary loading | `bpdecode.tokenizer` | `from_tokens` for tests; `from_hf` for byte-level BPE (defaults to `Qwen/Qwen2.5-0.5B`, laptop-friendly) |
 | constraint interface | `bpdecode.interface` | `Constraint` protocol + HF `LogitsProcessor` shim |

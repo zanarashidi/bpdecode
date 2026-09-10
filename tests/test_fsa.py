@@ -83,6 +83,32 @@ def test_step_and_mask_match_tokendfa(pattern: str) -> None:
                 assert got == ref, (pattern, state, tid)
 
 
+def test_multibyte_tokens_split_across_the_utf8_automaton() -> None:
+    # byte-level BPE routinely splits one code point across several tokens;
+    # the export must walk those partial byte sequences correctly.
+    # tokens: 0=c 1=a 2=f 3=0xC3 4=0xA9 5=0xC3A9 6=x 7=eos
+    vocab = Vocabulary.from_tokens(
+        [b"c", b"a", b"f", b"\xc3", b"\xa9", b"\xc3\xa9", b"x", b"<eos>"],
+        eos_id=7,
+    )
+    dfa = compile_regex("caf(é|e)")
+    tdfa = TokenDFA(dfa, vocab)
+    fsa = fsa_from_dfa(dfa)
+    toks = token_symbols(dfa, vocab)
+
+    for state in _reachable_states(dfa):
+        assert compute_mask(fsa, toks, state) == tdfa.mask(state), state
+
+    # "caf" then the lone 0xC3 lead byte is a live partial-UTF-8 prefix of "café"
+    s = tdfa.start
+    for tid in (0, 1, 2, 3):
+        s = tdfa.step(s, tid)
+        assert s != DEAD
+    assert tdfa.step(s, 4) != DEAD  # 0xA9 completes é -> accepting
+    assert tdfa.step(s, 5) == DEAD  # a second 0xC3A9 pair is not valid here
+    assert step(fsa, toks, s, 4) == tdfa.step(s, 4)
+
+
 def test_eos_only_at_accepting_states() -> None:
     dfa = compile_regex("[01]+")
     tdfa = TokenDFA(dfa, VOCAB)

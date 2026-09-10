@@ -33,8 +33,8 @@ class FsaTable:
     """Dense DFA over symbol classes, row-major ``trans[state * num_symbols + sym]``.
 
     ``dead`` is absorbing and non-accepting; ``live[s]`` is true iff an accepting
-    state is reachable from ``s``.  ``symbols`` keeps the half-open code-point
-    ranges each class stands for -- needed to map token bytes to class ids, not
+    state is reachable from ``s``.  ``symbols`` keeps the half-open byte ranges
+    each class stands for -- needed to map token bytes to class ids, not
     uploaded to the device.
     """
 
@@ -55,9 +55,9 @@ class FsaTable:
 class TokenSymbols:
     """Token id -> the symbol-class ids its code points drive through the FSA.
 
-    Ragged: token ``t`` occupies ``symbols[offsets[t]:offsets[t + 1]]``.  A code
-    point outside every class is stored as ``-1``; the scalar ``step`` treats
-    such a token as never allowed.
+    Ragged: token ``t`` occupies ``symbols[offsets[t]:offsets[t + 1]]``.  A byte
+    outside every class is stored as ``-1``; the scalar ``step`` treats such a
+    token as never allowed.
     """
 
     vocab_size: int
@@ -131,13 +131,13 @@ def fsa_from_dfa(dfa: DFA) -> FsaTable:
 
 def token_symbols(dfa: DFA, vocab: Vocabulary) -> TokenSymbols:
     """Map every token id to the sequence of :class:`DFA` symbol classes its
-    code points select.  Code points outside every class become ``-1``.
+    raw bytes select.  A byte outside every class becomes ``-1``.
     """
     offsets = [0]
     syms: list[int] = []
     for tb in vocab.token_bytes:
-        for ch in tb.decode("utf-8", "surrogateescape"):
-            syms.append(dfa.symbol_of(ord(ch)))
+        for byte in tb:
+            syms.append(dfa.symbol_of(byte))
         offsets.append(len(syms))
     eos = vocab.eos_id if vocab.eos_id is not None else -1
     return TokenSymbols(

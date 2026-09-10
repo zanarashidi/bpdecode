@@ -1,9 +1,9 @@
 """A small regex parser.
 
-Supported syntax (enough to serve as a correctness oracle for Phase 0):
+Supported syntax:
 
     literal characters, with ``\\`` escapes
-    ``.``            any byte
+    ``.``            any Unicode scalar (lowered to its UTF-8 bytes downstream)
     ``*`` ``+`` ``?``  greedy quantifiers (greediness is irrelevant for
                        language membership, which is all we use)
     ``a|b``          alternation
@@ -18,7 +18,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-BYTE_MAX = 0x10FFFF  # we parse Unicode code points; bytes come later
+UNICODE_MAX = 0x10FFFF  # AST ranges are code points; compile.py lowers them to UTF-8
 
 
 class RegexSyntaxError(ValueError):
@@ -137,7 +137,7 @@ class _Parser:
             return self._parse_class()
         if ch == ".":
             self.next()
-            return CharSet(((0, BYTE_MAX),))
+            return CharSet(((0, UNICODE_MAX),))
         if ch in ("*", "+", "?"):
             raise RegexSyntaxError(f"nothing to repeat before '{ch}'")
         if ch in ("^", "$"):
@@ -221,8 +221,8 @@ def _negate(ranges: tuple[tuple[int, int], ...]) -> tuple[tuple[int, int], ...]:
         if lo > cursor:
             out.append((cursor, lo - 1))
         cursor = max(cursor, hi + 1)
-    if cursor <= BYTE_MAX:
-        out.append((cursor, BYTE_MAX))
+    if cursor <= UNICODE_MAX:
+        out.append((cursor, UNICODE_MAX))
     return tuple(out)
 
 

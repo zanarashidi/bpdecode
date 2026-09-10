@@ -71,8 +71,11 @@ tests/            differential tests vs the CPU reference; fuzzing
       `build_reachability_cuda` iterative kernel written (needs a GPU to run)
 - [x] `compute_mask_batch_cuda`: one warp/request, `__ballot_sync` token packing,
       caller-supplied stream (written; unrun -- no local GPU)
-- [ ] byte-DFA x tokenizer product: move the pipeline off UTF-8/surrogateescape
-      to raw bytes (regex alphabet 0..255, tokens as byte strings) -- **next**
+- [x] byte-DFA x tokenizer product: pipeline is on raw bytes now -- regex
+      `CharSet`s are lowered to their UTF-8 byte automaton (`regex/utf8.py`,
+      exhaustively checked vs the platform codec), DFA alphabet is 0..255,
+      `TokenDFA` / `token_symbols` feed raw token bytes (no more
+      surrogateescape). Partial-UTF-8 tokens from byte-level BPE now work.
 - [ ] `advance_state` kernel; fused `apply_mask` (Triton/CUDA)
 - [ ] scikit-build-core: compile `csrc` into the wheel; `torch.ops.bpdecode.*`
 - [ ] correctness: CUDA vs CPU reference over a regex suite (on GPU CI)
@@ -111,8 +114,9 @@ tests/            differential tests vs the CPU reference; fuzzing
 ## Key risks
 
 - **Tokenizer alignment** -- byte-level BPE, partial UTF-8, token healing.
-  Dominant source of correctness bugs. Phase 0 uses a UTF-8 decode with
-  `surrogateescape`; Phase 1 moves the whole pipeline to bytes.
+  Dominant source of correctness bugs. Phase 1 moved the pipeline to bytes
+  (regex -> UTF-8 byte automaton, tokens fed as raw bytes). Token healing is
+  still open.
 - **Token-level DFA blowup** for large vocab x complex grammar -> lazy
   construction + caching.
 - **Moving target** -- XGrammar / llguidance improve fast; the soft-lookahead

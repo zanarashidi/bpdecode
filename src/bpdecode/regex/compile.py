@@ -1,11 +1,13 @@
-"""Compile a regex AST into a deterministic finite automaton over code points.
+"""Compile a regex AST into a deterministic finite automaton over UTF-8 bytes.
 
 The pipeline is the textbook one: Thompson construction to an NFA with
-epsilon moves, then subset construction to a DFA.  Transitions are keyed by
-*symbol classes* -- disjoint code-point ranges that behave identically -- so
-the automaton stays small regardless of alphabet size.  This is the same
-representation the CUDA kernels will consume (a CSR transition table), just
-built and stored on the host for now.
+epsilon moves, then subset construction to a DFA.  The alphabet is *bytes* --
+``CharSet`` nodes carry Unicode code-point ranges, and :func:`_build_nfa`
+lowers each one to its UTF-8 byte encoding (:mod:`bpdecode.regex.utf8`) so the
+automaton consumes the same raw bytes the tokenizer emits.  Transitions are
+keyed by *symbol classes* -- disjoint byte ranges that behave identically --
+which keeps the table small; this is the CSR representation the CUDA kernels
+consume, built and stored on the host for now.
 """
 
 from __future__ import annotations
@@ -23,6 +25,9 @@ from .parser import (
     Star,
     parse,
 )
+from .utf8 import utf8_sequences
+
+_BYTE_MAX = 0x100  # exclusive upper bound of the byte alphabet
 
 Range = tuple[int, int]
 
@@ -57,7 +62,15 @@ def _build_nfa(node: Node) -> _NFA:
         if isinstance(n, CharSet):
             s = nfa.new_state()
             e = nfa.new_state()
-            nfa.add(s, n.ranges, e)
+            # lower each code-point range to UTF-8: every byte sequence is a
+            # fresh chain of single-byte-range edges from s to e.
+            for lo, hi in n.ranges:
+                for seq in utf8_sequences(lo, hi):
+                    prev = s
+                    for j, (blo, bhi) in enumerate(seq):
+                        nxt = e if j == len(seq) - 1 else nfa.new_state()
+                        nfa.add(prev, ((blo, bhi),), nxt)
+                        prev = nxt
             return s, e
         if isinstance(n, Concat):
             s = e = None
@@ -100,7 +113,7 @@ def _build_nfa(node: Node) -> _NFA:
 
 def _boundaries(nfa: _NFA) -> list[int]:
     """Return the sorted cut points that define the alphabet's symbol classes."""
-    points = {0, 0x110000}
+    points = {0, _BYTE_MAX}
     for edge_list in nfa.edges.values():
         for ranges, _ in edge_list:
             if ranges is None:
@@ -113,9 +126,9 @@ def _boundaries(nfa: _NFA) -> list[int]:
 
 @dataclass(frozen=True)
 class DFA:
-    """A complete DFA over code points.
+    """A complete DFA over bytes.
 
-    ``symbols`` are half-open ``[lo, hi)`` intervals; every code point in one
+    ``symbols`` are half-open ``[lo, hi)`` byte intervals; every byte in one
     interval drives the same transition.  ``trans[state][k]`` is the target of
     symbol class ``k`` (``-1`` = dead / no match).  ``start`` may be ``-1`` if
     the language is empty.
@@ -127,23 +140,23 @@ class DFA:
     start: int
     dead: int
 
-    def symbol_of(self, cp: int) -> int:
+    def symbol_of(self, byte: int) -> int:
         lo, hi = 0, len(self.symbols)
         while lo < hi:
             mid = (lo + hi) // 2
             s, e = self.symbols[mid]
-            if cp < s:
+            if byte < s:
                 hi = mid
-            elif cp >= e:
+            elif byte >= e:
                 lo = mid + 1
             else:
                 return mid
         return -1
 
-    def step(self, state: int, cp: int) -> int:
+    def step(self, state: int, byte: int) -> int:
         if state < 0:
             return self.dead
-        k = self.symbol_of(cp)
+        k = self.symbol_of(byte)
         if k < 0:
             return self.dead
         return self.trans[state][k]

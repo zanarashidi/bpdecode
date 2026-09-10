@@ -26,10 +26,9 @@ class TokenDFA:
         self.dfa = dfa
         self.vocab = vocab
         self._live = dfa.live_states()
-        # token id -> tuple of code points (decoded once)
-        self._cps: list[tuple[int, ...]] = [
-            tuple(ord(c) for c in b.decode("utf-8", "surrogateescape"))
-            for b in vocab.token_bytes
+        # token id -> the raw bytes it contributes (the DFA alphabet)
+        self._token_bytes: list[tuple[int, ...]] = [
+            tuple(b) for b in vocab.token_bytes
         ]
         self._step_cache: dict[tuple[int, int], int] = {}
         self._allowed_cache: dict[int, frozenset[int]] = {}
@@ -41,10 +40,10 @@ class TokenDFA:
     def is_accepting(self, state: int) -> bool:
         return state in self.dfa.accept
 
-    def _run(self, state: int, cps: tuple[int, ...]) -> int:
+    def _run(self, state: int, data: tuple[int, ...]) -> int:
         cur = state
-        for cp in cps:
-            cur = self.dfa.step(cur, cp)
+        for byte in data:
+            cur = self.dfa.step(cur, byte)
             if cur == self.dfa.dead:
                 return DEAD
         return cur
@@ -57,7 +56,7 @@ class TokenDFA:
         hit = self._step_cache.get(key)
         if hit is not None:
             return hit
-        nxt = self._run(state, self._cps[token_id])
+        nxt = self._run(state, self._token_bytes[token_id])
         if nxt != DEAD and nxt not in self._live:
             nxt = DEAD
         self._step_cache[key] = nxt

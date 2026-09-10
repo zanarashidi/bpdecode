@@ -27,8 +27,8 @@ def brute_force_valid_strings(pattern: str, max_tokens: int) -> list[tuple[int, 
             text = "".join(TOKENS[i] for i in combo)
             state = dfa.start
             dead = False
-            for ch in text:
-                state = dfa.step(state, ord(ch))
+            for byte in text.encode("utf-8"):
+                state = dfa.step(state, byte)
                 if state == dfa.dead:
                     dead = True
                     break

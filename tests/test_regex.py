@@ -6,8 +6,8 @@ from bpdecode.regex import RegexSyntaxError, compile_regex
 def accepts(pattern: str, text: str) -> bool:
     dfa = compile_regex(pattern)
     state = dfa.start
-    for ch in text:
-        state = dfa.step(state, ord(ch))
+    for byte in text.encode("utf-8"):
+        state = dfa.step(state, byte)
         if state == dfa.dead:
             return False
     return state in dfa.accept
@@ -38,6 +38,14 @@ def accepts(pattern: str, text: str) -> bool:
         (r"-?[0-9]+(\.[0-9]+)?", "3.", False),
         (".", "x", True),
         ("a.c", "abc", True),
+        # non-ASCII: patterns and text are lowered to UTF-8 bytes
+        ("café", "café", True),
+        ("caf.", "café", True),
+        ("caf.", "cafX", True),
+        ("[α-ω]+", "αβγδω", True),
+        ("[α-ω]+", "αβΔ", False),
+        ("🎂|🍰", "🍰", True),
+        (".", "€", True),
     ],
 )
 def test_membership(pattern, text, ok):
