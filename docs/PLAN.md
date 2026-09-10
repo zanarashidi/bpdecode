@@ -29,10 +29,13 @@ Two layers:
 ```
 src/bpdecode/     host front-end (Python): regex/PDA compilers, TokenDFA,
                   Constraint interface, CPU reference (correctness oracle)
+  regex/utf8.py               code-point range -> UTF-8 byte automaton
+  fsa.py                      DFA + Vocabulary -> FsaTable/TokenSymbols export
+                              (+ scalar step/compute_mask mirror of the C++ core)
 csrc/             C++/CUDA core: FsaTable/TokenSymbols ABI, mask kernels
   include/bpdecode/mask.hpp    the ABI callers compile against
-  src/mask_cpu.cpp             scalar reference
-  src/mask_cuda.cu             batched kernels (Phase 1+)
+  src/mask_cpu.cpp             scalar reference + build_reachability
+  src/mask_cuda.cu             batched kernels (warp/request, __ballot_sync)
 bindings/         torch custom op + HF / vLLM LogitsProcessor adapters (Phase 2)
 bench/            throughput / TTFT / per-token overhead vs Outlines, XGrammar
 tests/            differential tests vs the CPU reference; fuzzing
@@ -64,21 +67,32 @@ tests/            differential tests vs the CPU reference; fuzzing
 
 ### Phase 1 -- FSA path, single request, GPU mask *(in progress)*
 
-- [x] host FSA export: `bpdecode.fsa` flattens DFA + vocab into `FsaTable` /
-      `TokenSymbols` (the C++ ABI, POD arrays ready for CSR upload) + a scalar
-      `step` / `compute_mask` mirror, differential-tested vs `TokenDFA`
-- [x] `build_reachability` ported to C++ (`mask_cpu.cpp`, boolean BP fixpoint);
-      `build_reachability_cuda` iterative kernel written (needs a GPU to run)
-- [x] `compute_mask_batch_cuda`: one warp/request, `__ballot_sync` token packing,
-      caller-supplied stream (written; unrun -- no local GPU)
-- [x] byte-DFA x tokenizer product: pipeline is on raw bytes now -- regex
+Done -- host side, runs without a GPU:
+
+- [x] byte-DFA x tokenizer product: the whole pipeline is on raw bytes. Regex
       `CharSet`s are lowered to their UTF-8 byte automaton (`regex/utf8.py`,
-      exhaustively checked vs the platform codec), DFA alphabet is 0..255,
-      `TokenDFA` / `token_symbols` feed raw token bytes (no more
-      surrogateescape). Partial-UTF-8 tokens from byte-level BPE now work.
+      exhaustively checked vs the platform codec); the DFA alphabet is 0..255;
+      `TokenDFA` / `token_symbols` walk raw token bytes, so partial-UTF-8
+      tokens from byte-level BPE resolve correctly. No more `surrogateescape`.
+- [x] host FSA export: `bpdecode.fsa` flattens a compiled DFA + `Vocabulary`
+      into `FsaTable` / `TokenSymbols` (the `csrc` ABI, POD arrays ready for
+      CSR upload) plus a scalar `step` / `compute_mask` mirror of
+      `mask_cpu.cpp`, differential-tested against `TokenDFA`.
+- [x] `build_reachability` ported to C++ (`mask_cpu.cpp`): boolean-BP backward
+      reachability, so `FsaTable.live` is computed, not supplied. gtests.
+
+Written, not yet exercised (no local GPU -- needs GPU CI):
+
+- [x] `compute_mask_batch_cuda`: one warp per request, `__ballot_sync` packs
+      32 token verdicts per word, caller-supplied stream.
+- [x] `build_reachability_cuda`: iterative `live |= OR(succ)` fixpoint.
+
+Still to do:
+
 - [ ] `advance_state` kernel; fused `apply_mask` (Triton/CUDA)
 - [ ] scikit-build-core: compile `csrc` into the wheel; `torch.ops.bpdecode.*`
-- [ ] correctness: CUDA vs CPU reference over a regex suite (on GPU CI)
+- [ ] correctness: run the CUDA path vs the CPU reference over a regex suite
+      on GPU CI; wire an nvbench microbench
 
 ### Phase 2 -- batching + serving integration
 
