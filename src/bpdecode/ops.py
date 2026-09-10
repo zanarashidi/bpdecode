@@ -118,13 +118,16 @@ class FsaTensors:
         return fsa.densify() if want else fsa
 
 
-def build_token_transitions(fsa: FsaTensors) -> torch.Tensor:
+def build_token_transitions(
+    fsa: FsaTensors, rows: torch.Tensor | list[int] | None = None
+) -> torch.Tensor:
     """Dense ``[num_states, vocab]`` int32: state after emitting token ``t`` from
     state ``s`` (``-1`` if ``t`` is rejected -- undefined transition or a state
     no accepting state is reachable from). Matches ``step`` token for token.
 
     Built by running the whole vocab through the byte-DFA in parallel, one
-    byte-position at a time.
+    byte-position at a time. Pass ``rows`` to compute only those start states
+    (the result is ``[len(rows), vocab]`` in that order).
     """
     dev = fsa.device
     S, M, V = fsa.num_states, fsa.num_symbols, fsa.vocab_size
@@ -132,9 +135,13 @@ def build_token_transitions(fsa: FsaTensors) -> torch.Tensor:
     offsets = fsa.offsets.to(torch.long)
     lengths = offsets[1:] - offsets[:-1]  # [V]
 
-    cur = (
-        torch.arange(S, device=dev).view(S, 1).expand(S, V).contiguous().to(torch.long)
+    row_states = (
+        torch.arange(S, device=dev)
+        if rows is None
+        else torch.as_tensor(rows, device=dev, dtype=torch.long)
     )
+    R = row_states.numel()
+    cur = row_states.view(R, 1).expand(R, V).contiguous().to(torch.long)
     if V and int(lengths.max()):
         sym = fsa.symbols.to(torch.long)  # [nnz]
         # walk tokens shortest-first so iteration k only touches the tokens
@@ -159,13 +166,12 @@ def build_token_transitions(fsa: FsaTensors) -> torch.Tensor:
         live[cur], cur.to(torch.int32), torch.full_like(cur, -1, dtype=torch.int32)
     )
     if fsa.eos_id is not None and 0 <= fsa.eos_id < V:
-        acc = fsa.accept.to(torch.bool)  # [S]
-        col = torch.where(
+        acc = fsa.accept.to(torch.bool)[row_states]  # [R]
+        out[:, fsa.eos_id] = torch.where(
             acc,
-            torch.arange(S, device=dev, dtype=torch.int32),
-            torch.full((S,), -1, dtype=torch.int32, device=dev),
+            row_states.to(torch.int32),
+            torch.full((R,), -1, dtype=torch.int32, device=dev),
         )
-        out[:, fsa.eos_id] = col
     return out
 
 

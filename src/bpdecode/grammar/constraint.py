@@ -17,7 +17,33 @@ from ..tokenizer import Vocabulary
 from .gbnf import parse_gbnf
 from .ir import Grammar
 from .pda import PDA, CompiledGrammar
+from .regular import frame_is_regular, residual_dfa
 from .tokentrie import token_trie
+
+_BYTE_SYMS: dict[int, object] = {}
+
+
+def _byte_symbols(vocab: Vocabulary) -> object:
+    """TokenSymbols where each token's symbols are its raw bytes (a 256-way,
+    byte-indexed partition). Shared by every residual DFA; built once per vocab.
+    """
+    from ..fsa import TokenSymbols
+
+    hit = _BYTE_SYMS.get(id(vocab))
+    if hit is None:
+        offsets = [0]
+        total = 0
+        for tb in vocab.token_bytes:
+            total += len(tb)
+            offsets.append(total)
+        hit = TokenSymbols(
+            vocab_size=vocab.size,
+            eos_id=vocab.eos_id if vocab.eos_id is not None else -1,
+            offsets=offsets,
+            symbols=b"".join(vocab.token_bytes),
+        )
+        _BYTE_SYMS[id(vocab)] = hit
+    return hit
 
 
 class CFGConstraint(BaseConstraint):
@@ -34,7 +60,7 @@ class CFGConstraint(BaseConstraint):
         self._vocab = vocab
         self._max_depth = max_depth
         self._pda = PDA(self._compiled, max_depth=max_depth)
-        self._token_bytes: list[bytes] = list(vocab.token_bytes)
+        self._token_bytes = vocab.token_bytes
         self._history: list[int] = []
 
     @classmethod
@@ -46,9 +72,8 @@ class CFGConstraint(BaseConstraint):
         obj._vocab = vocab
         obj._max_depth = max_depth
         obj._pda = PDA(compiled, max_depth=max_depth)
-        obj._token_bytes = list(vocab.token_bytes)
+        obj._token_bytes = vocab.token_bytes
         obj._history = []
-        obj._mask_cache = {}
         return obj
 
     @property
@@ -91,12 +116,88 @@ class CFGConstraint(BaseConstraint):
         self._history.append(token_id)
 
     def allowed_ids(self) -> frozenset[int]:
-        # the mask is a pure function of (vocab, config-set); shared across every
-        # request on this grammar, and stable inside a string / other loop.
+        # the mask is a pure function of (vocab, config-set), shared across every
+        # request on this grammar.
         memo = self._compiled.mask_memo
-        key = (id(self._vocab), self._pda.configs)
+        cfgset = self._pda.configs
+        key = (id(self._vocab), cfgset)
         hit = memo.get(key)
-        if hit is None:
-            hit = frozenset(token_trie(self._vocab).allowed(self._pda))
-            memo[key] = hit
-        return hit
+        if hit is not None:
+            return hit
+
+        tops = {cfg[-1] for cfg in cfgset if cfg}
+        c = self._compiled
+        # only worth the residual-DFA precompute when many first bytes are
+        # allowed (a string / number loop); a narrow frontier means the trie DFS
+        # visits few nodes and is cheaper.
+        span = sum(hi - lo + 1 for lo, hi in self._pda.first_byte_ranges())
+        wide = span >= 32
+        if wide and tops and all(
+            frame_is_regular(c, c.regular, r, s) for r, s in tops
+        ):
+            result = self._fast_mask(tops)
+        else:
+            result = frozenset(token_trie(self._vocab).allowed(self._pda))
+        memo[key] = result
+        return result
+
+    def _fast_mask(self, tops: set[tuple[str, int]]) -> frozenset[int]:
+        """Regular top frames: context-independent tokens come from the dense
+        residual-DFA table; only boundary tokens (which could pop the frame)
+        are simulated against the real stack.
+        """
+        allowed: set[int] = set()
+        boundary: set[int] = set()
+        for r, s in tops:
+            ci, bd = self._residual_masks(r, s)
+            allowed |= ci
+            boundary |= bd
+        for t in boundary - allowed:
+            if self._feeds_ok(self._token_bytes[t]):
+                allowed.add(t)
+        if self._vocab.eos_id is not None and self.is_complete():
+            allowed.add(self._vocab.eos_id)
+        return frozenset(allowed)
+
+    def _residual_masks(
+        self, rule: str, state: int
+    ) -> tuple[frozenset[int], frozenset[int]]:
+        memo = self._compiled.residual_memo
+        key = (id(self._vocab), rule, state)
+        hit = memo.get(key)
+        if hit is not None:
+            return hit
+
+        # different NFA states in the same loop yield isomorphic residual DFAs;
+        # key the expensive part by the DFA itself (a frozen, hashable dataclass).
+        dfa = residual_dfa(self._compiled, rule, state)
+        dfa_key = (id(self._vocab), dfa)
+        result = memo.get(dfa_key)
+        if result is None:
+            result = self._masks_for_dfa(dfa)
+            memo[dfa_key] = result
+        memo[key] = result
+        return result
+
+    def _masks_for_dfa(self, dfa: object) -> tuple[frozenset[int], frozenset[int]]:
+        import torch
+
+        from ..fsa import fsa_from_dfa
+        from ..ops import FsaTensors, build_token_transitions
+
+        fsa = FsaTensors.from_tables(fsa_from_dfa(dfa), _byte_symbols(self._vocab))
+        tn = build_token_transitions(fsa, rows=[dfa.start])[0]  # [vocab] int32
+        if dfa.accept:
+            acc = torch.tensor(sorted(dfa.accept), dtype=tn.dtype)
+            ends_accept = torch.isin(tn, acc)
+        else:
+            ends_accept = torch.zeros_like(tn, dtype=torch.bool)
+        ci_mask = (tn != -1) & ~ends_accept
+        eos = self._vocab.eos_id
+        if eos is not None and eos < ci_mask.shape[0]:
+            ci_mask[eos] = False
+            ends_accept[eos] = False
+        return (
+            frozenset(ci_mask.nonzero().flatten().tolist()),
+            frozenset(ends_accept.nonzero().flatten().tolist()),
+        )

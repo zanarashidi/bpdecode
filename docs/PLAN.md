@@ -170,9 +170,15 @@ CUDA kernels -- written, run only on GPU CI (`.github/workflows/gpu.yml`,
       step by step; generates valid JSON.
 - [ ] persistent per-request execution stack; `compute_mask_pda` /
       `advance_state_pda` GPU kernels (push / pop, depth cap).
-- [ ] context-independent token split (precompute the mask per NFA state,
-      ignoring the stack -- the XGrammar trick; makes the cold path fast).
-- [ ] benchmark vs XGrammar, llguidance; extra cross-check vs `lark`.
+- [x] context-independent token split: `grammar/regular.py` -- when a top frame
+      sits in a regular loop (`json-char*` etc.), splice the residual out
+      (inlining regular callees), compile to a byte DFA, and take the mask from
+      the dense `tok_next` row; only boundary tokens (which could pop the frame)
+      are simulated. Cuts the cold path ~30x; warm is a memo hit.
+- [x] benchmark vs XGrammar / llguidance (`bench/json_schema_mask.py`,
+      `bench/RESULTS.md`): compile ~instant for all three; **warm ~0.6 µs/token,
+      ~14x under xgrammar, ~70x under llguidance**; the cost is a ~0.2 s
+      first-request warmup + ~0.5 s one-time token-trie build per vocab.
 
 ### Phase 4 -- soft lookahead (novel)
 

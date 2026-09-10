@@ -91,15 +91,21 @@ class CompiledGrammar:
     rules: dict[str, RuleNFA]
     root: str
     coreachable: dict[str, frozenset[int]]
+    regular: frozenset[str] = frozenset()  # rules that transitively call only regular rules
     # memos shared by every PDA over this grammar
     transition_memo: dict = field(default_factory=dict)  # closure + byte transition
     mask_memo: dict = field(default_factory=dict)  # (vocab id, config-set) -> token ids
+    residual_memo: dict = field(default_factory=dict)  # (vocab id, rule, state) -> masks
 
     @classmethod
     def build(cls, grammar: Grammar) -> CompiledGrammar:
+        from .regular import regular_rules
+
         rules = compile_rules(grammar)
         ok = _rule_nonempty(rules)
-        return cls(rules, grammar.root, _coreachable_sets(rules, ok))
+        obj = cls(rules, grammar.root, _coreachable_sets(rules, ok))
+        obj.regular = regular_rules(obj)
+        return obj
 
 
 class PDA:

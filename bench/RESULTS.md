@@ -44,3 +44,37 @@ that matters.
 competitive; the actual differentiator is the Phase 4 soft-lookahead layer
 (a weighted backward pass Outlines/XGrammar don't have) and GPU batch
 amortization.
+
+---
+
+# json_schema_mask.py -- bpdecode vs XGrammar vs llguidance
+
+Same box, `xgrammar` 0.2.6, `llguidance` 1.8.0. Per token per sequence unless
+noted. bpdecode also builds a token trie once per vocabulary (~0.5 s).
+
+| schema | metric | bpdecode | xgrammar | llguidance |
+|---|---|---:|---:|---:|
+| person | compile | 0.5 ms | ~0 ms | 0.1 ms |
+| person | **cold** (1st request) | ~9000 µs | 14 µs | 121 µs |
+| person | **warm** (steady state) | **0.6 µs** | 8.3 µs | 43 µs |
+| nested | compile | 0.6 ms | ~0 ms | 0.1 ms |
+| nested | cold | ~6800 µs | 5 µs | 62 µs |
+| nested | warm | **0.6 µs** | 3.8 µs | 56 µs |
+
+## Reading
+
+bpdecode's config-set masks (and the residual DFAs for regular loops like
+`json-char*`) are **memoised on the compiled grammar**, keyed by config-set and
+shared across every request. So:
+
+- **first request** with a new grammar pays a warmup -- ~0.15-0.2 s total
+  (the "cold" per-token figure is that spread over the sample). Plus the
+  one-time ~0.5 s token-trie build per vocabulary.
+- **every request after** is a dict lookup: **~0.6 µs / token**, an order of
+  magnitude under xgrammar and ~70x under llguidance's Python API.
+
+xgrammar does the equivalent precompute in C++ at matcher-creation time, so its
+cold path is already fast; it has no warm speedup to give. For a serving
+workload where one schema handles thousands of requests, bpdecode's warm number
+is what matters. The warmup is the price; hiding it (precompute at compile,
+move the trie build to the C++ core) is Phase 5.
