@@ -126,8 +126,12 @@ CUDA kernels -- written, run only on GPU CI (`.github/workflows/gpu.yml`,
       batch-level `LogitsProcessor` (add/remove/move/advance/mask over
       `ConstraintBatch`). Tested with synthetic inputs; not yet run against a
       live vLLM engine.
-- [ ] end-to-end demo (Qwen2.5-0.5B); benchmark vs Outlines (tokens/s,
-      per-token mask overhead).
+- [x] benchmark vs Outlines: `bench/regex_mask.py` (compile time + per-token
+      mask overhead + allowed-set cross-check). CPU run recorded in
+      `bench/RESULTS.md` -- output is identical to `outlines_core`, but its
+      Rust compile is ~16x faster and its precomputed token-FSM makes a step
+      2-15x faster on CPU. GPU-batch rerun pending; see the analysis there.
+- [ ] end-to-end demo (Qwen2.5-0.5B) -- after the remaining phases.
 
 ### Phase 3 -- CFG / pushdown (JSON Schema, GBNF)
 
@@ -150,6 +154,10 @@ CUDA kernels -- written, run only on GPU CI (`.github/workflows/gpu.yml`,
 
 - stream overlap with forward pass, persistent kernel, Nsight tuning
 - multi-GPU (shard by request -- state is tiny)
+- move the regex -> `FsaTable`/`TokenSymbols` compile into the C++ core
+  (currently pure Python -- ~16x slower than `outlines_core`, see `bench/`)
+- dense precomputed `tok_next[state][token]` table so a mask step is an
+  O(vocab) gather, not a re-walk of every token's bytes (`bench/RESULTS.md`)
 - docs, examples, `cibuildwheel` wheels, benchmark report
 
 ## Key risks
