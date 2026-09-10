@@ -169,7 +169,12 @@ CUDA kernels -- written, run only on GPU CI (`.github/workflows/gpu.yml`,
       `CFGConstraint`, drops into `model.generate()`. Tested vs `CFGConstraint`
       step by step; generates valid JSON.
 - [ ] persistent per-request execution stack; `compute_mask_pda` /
-      `advance_state_pda` GPU kernels (push / pop, depth cap).
+      `advance_state_pda` GPU kernels (push / pop, depth cap). **Deferred** --
+      the memoised CPU mask (~0.6 us/token) already beats xgrammar, which also
+      computes masks on CPU and only *applies* them on GPU. The useful GPU
+      piece is a packed-bitmask apply (the FSA path's `apply_mask_` already
+      does the equivalent); full on-device PDA is a lot of work off the
+      critical path. Revisit if a profiler says otherwise.
 - [x] context-independent token split: `grammar/regular.py` -- when a top frame
       sits in a regular loop (`json-char*` etc.), splice the residual out
       (inlining regular callees), compile to a byte DFA, and take the mask from
@@ -180,14 +185,26 @@ CUDA kernels -- written, run only on GPU CI (`.github/workflows/gpu.yml`,
       ~14x under xgrammar, ~70x under llguidance**; the cost is a ~0.2 s
       first-request warmup + ~0.5 s one-time token-trie build per vocab.
 
-### Phase 4 -- soft lookahead (novel)
+### Phase 4 -- soft lookahead (novel) *(in progress)*
 
-- weighted automaton; k-step backward sum-product -> per-(state, token) log-mass
-- `soft_lookahead` kernel, CUDA-graph'd, bf16 log-domain
-- expose as temperature-scaled logit bias
-- eval: does soft guidance beat hard masking on structured-output accuracy
-  (JSON-mode correctness, BFCL function-calling)? Report honestly, incl. a
-  negative result.
+- [x] k-step backward sum-product over the token-DFA (`ops.build_lookahead`):
+      `logZ_0(s) = 0` if live else `-inf`; `logZ_{j+1}(s) = logsumexp_t
+      logZ_j(next(s,t))` (EOS -> a DONE sink). The weighted-count analogue of
+      `build_reachability`'s boolean fixpoint, log-domain.
+- [x] `lookahead[s][t] = logZ_{k-1}(delta(s,t))` (`-inf` if disallowed, so it
+      masks for free); `FsaTensors.with_lookahead(k)`.
+- [x] exposed as a logit bias: `ops.apply_soft_(logits, fsa, states, alpha)`
+      (`logits += alpha * lookahead[states]`; `alpha=0` == hard masking),
+      wired into `ConstraintBatch.apply_soft` and `RegexLogitsProcessor(...,
+      soft_k=, alpha=)`. Token-level, so it also prunes tokens with no valid
+      *token* continuation (the partial-token dead end from Phase 3).
+- [ ] port `build_lookahead` / `apply_soft` to CUDA (bf16, CUDA-graph the
+      fixed-k loop). Structurally identical to `build_token_transitions`.
+- [ ] eval vs hard masking on structured-output tasks -- `bench/soft_eval.py`;
+      report honestly incl. negative results.
+
+Also this phase: regex parser gained `{m,n}` counted repetition;
+`Vocabulary.from_hf` now sizes to `len(tok)` (covers the EOS / added tokens).
 
 ### Phase 5 -- perf hardening & release
 

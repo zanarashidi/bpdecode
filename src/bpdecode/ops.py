@@ -47,6 +47,8 @@ class FsaTensors:
     # state s, or -1 if t is rejected. When set, apply_mask_ / advance_state take
     # a gather fast path instead of re-walking token bytes.
     tok_next: torch.Tensor | None = None
+    # optional soft-lookahead bias [num_states, vocab] float32 (see build_lookahead)
+    lookahead: torch.Tensor | None = None
 
     @property
     def device(self) -> torch.device:
@@ -75,6 +77,7 @@ class FsaTensors:
             self.start,
             self.accepting,
             None if self.tok_next is None else self.tok_next.to(device),
+            None if self.lookahead is None else self.lookahead.to(device),
         )
 
     def densify(self) -> FsaTensors:
@@ -84,6 +87,13 @@ class FsaTensors:
         from dataclasses import replace
 
         return replace(self, tok_next=build_token_transitions(self))
+
+    def with_lookahead(self, k: int = 3) -> FsaTensors:
+        """Return a copy carrying the ``k``-step soft-lookahead bias table."""
+        from dataclasses import replace
+
+        base = self.densify()
+        return replace(base, lookahead=build_lookahead(base, k))
 
     @classmethod
     def from_tables(cls, fsa: FsaTable, toks: TokenSymbols) -> FsaTensors:
@@ -175,6 +185,66 @@ def build_token_transitions(
     return out
 
 
+def build_lookahead(fsa: FsaTensors, k: int) -> torch.Tensor:
+    """Soft-lookahead bias table ``[num_states, vocab]`` (float32).
+
+    ``out[s, t]`` is ``log Z_{k-1}(delta(s, t))`` -- the log of how many
+    grammar-valid token strings of length ``k - 1`` can follow token ``t``
+    emitted from state ``s`` (``-inf`` if ``t`` is not allowed from ``s``).
+    Larger = the token keeps more of the language open; add ``alpha * out`` to
+    the logits to steer away from valid-but-dead-end tokens (and it masks for
+    free, since disallowed entries are ``-inf``).
+
+    ``Z_j`` is the backward sum-product recurrence -- the weighted-count analogue
+    of ``build_reachability``'s boolean fixpoint -- run in the log domain:
+        logZ_0(s)   = 0 if s is live else -inf
+        logZ_{j+1}(s) = logsumexp_t logZ_j(next(s, t))
+    where ``next(s, EOS) = DONE`` with ``logZ_j(DONE) = 0`` when s is accepting.
+    """
+    if fsa.tok_next is None:
+        fsa = fsa.densify()
+    tn = fsa.tok_next.to(torch.long)  # [S, V]
+    S, V = tn.shape
+    dev = tn.device
+    live = fsa.live.to(torch.bool)
+    accept = fsa.accept.to(torch.bool)
+    neg_inf = torch.tensor(float("-inf"), device=dev)
+
+    logz = torch.where(live, torch.zeros(S, device=dev), neg_inf.expand(S))  # [S]
+    for _ in range(max(k - 1, 0)):
+        cand = torch.where(tn >= 0, logz[tn.clamp(min=0)], neg_inf)  # [S, V]
+        nxt = torch.logsumexp(cand, dim=1)  # [S]
+        # EOS from an accepting state reaches DONE (logZ = 0)
+        nxt = torch.where(accept, torch.logaddexp(nxt, torch.zeros(S, device=dev)), nxt)
+        logz = torch.where(live, nxt, neg_inf.expand(S))
+
+    out = torch.where(tn >= 0, logz[tn.clamp(min=0)], neg_inf)  # [S, V]
+    if fsa.eos_id is not None and 0 <= fsa.eos_id < V:
+        out[:, fsa.eos_id] = torch.where(accept, torch.zeros(S, device=dev), neg_inf)
+    return out
+
+
+def apply_soft_(
+    logits: torch.Tensor,
+    fsa: FsaTensors,
+    states: torch.Tensor,
+    alpha: float = 1.0,
+) -> torch.Tensor:
+    """In place: ``logits += alpha * lookahead[states]``.
+
+    Disallowed tokens get ``-inf`` regardless of ``alpha`` (so this also masks);
+    ``alpha = 0`` is exactly hard masking.
+    """
+    if fsa.lookahead is None:
+        raise ValueError("fsa has no lookahead table; build with dense + with_lookahead")
+    s = states.long()
+    bias = fsa.lookahead.index_select(0, s.clamp(min=0)).clone()
+    bias[s < 0] = float("-inf")  # BROKEN / FREE
+    if alpha == 0.0:
+        return logits.masked_fill_(torch.isneginf(bias), float("-inf"))
+    return logits.add_(bias, alpha=alpha)
+
+
 def apply_mask_(
     logits: torch.Tensor,
     fsa: FsaTensors,
@@ -185,7 +255,10 @@ def apply_mask_(
     ``neg_inf``, one grammar state per row.
     """
     if fsa.tok_next is not None:
-        rejected = fsa.tok_next.index_select(0, states.long()) == -1  # [B, V]
+        s = states.long()
+        broken = s < 0  # BROKEN / FREE -> nothing is allowed
+        rejected = fsa.tok_next.index_select(0, s.clamp_(min=0)) == -1  # [B, V]
+        rejected |= broken.unsqueeze(1)
         return logits.masked_fill_(rejected, neg_inf)
     return torch.ops.bpdecode.apply_mask_(
         logits, fsa.trans, fsa.accept, fsa.live, fsa.num_symbols, fsa.dead,

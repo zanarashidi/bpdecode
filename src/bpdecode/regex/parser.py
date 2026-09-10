@@ -112,15 +112,47 @@ class _Parser:
             return Empty()
         return parts[0] if len(parts) == 1 else Concat(tuple(parts))
 
-    # repeat := atom ('*' | '+' | '?')*
+    # repeat := atom ('*' | '+' | '?' | '{' m (',' n?)? '}')*
     def parse_repeat(self) -> Node:
         node = self.parse_atom()
-        while (ch := self.peek()) in ("*", "+", "?"):
+        while True:
+            ch = self.peek()
+            if ch in ("*", "+", "?"):
+                self.next()
+                node = {"*": Star, "+": Plus, "?": Opt}[ch](node)
+            elif ch == "{":
+                node = self._counted(node)
+            else:
+                return node
+
+    def _counted(self, node: Node) -> Node:
+        assert self.next() == "{"
+        lo = self._count_int()
+        hi: int | None = lo
+        if self.peek() == ",":
             self.next()
-            node = {"*": Star, "+": Plus, "?": Opt}[ch](node)
-        if self.peek() == "{":
-            raise RegexSyntaxError("counted repetition {m,n} is not supported yet")
-        return node
+            hi = None if self.peek() == "}" else self._count_int()
+        if self.peek() != "}":
+            raise RegexSyntaxError("expected '}' to close counted repetition")
+        self.next()
+        if hi is not None and hi < lo:
+            raise RegexSyntaxError("counted repetition {m,n} has n < m")
+        parts: list[Node] = [node] * lo
+        if hi is None:
+            parts.append(Star(node))
+        else:
+            parts.extend(Opt(node) for _ in range(hi - lo))
+        if not parts:
+            return Empty()
+        return parts[0] if len(parts) == 1 else Concat(tuple(parts))
+
+    def _count_int(self) -> int:
+        start = self.pos
+        while not self.eof() and self.src[self.pos].isdigit():
+            self.pos += 1
+        if self.pos == start:
+            raise RegexSyntaxError("expected a number in counted repetition")
+        return int(self.src[start : self.pos])
 
     def parse_atom(self) -> Node:
         ch = self.peek()

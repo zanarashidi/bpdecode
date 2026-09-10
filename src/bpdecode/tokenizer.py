@@ -62,7 +62,10 @@ class Vocabulary:
             if hasattr(tokenizer_or_name, "convert_ids_to_tokens")
             else AutoTokenizer.from_pretrained(tokenizer_or_name)  # type: ignore[arg-type]
         )
-        vocab_size = int(getattr(tok, "vocab_size", len(tok)))
+        # len(tok) covers added/special tokens (EOS often lives past
+        # `vocab_size`); the model's logit dim may be padded even beyond that,
+        # which callers handle by masking the tail.
+        vocab_size = max(int(getattr(tok, "vocab_size", 0)), len(tok))
         byte_decoder = _gpt2_byte_decoder(tok)
         added = set(getattr(tok, "get_added_vocab", dict)().values())
 

@@ -33,7 +33,12 @@ def _as_vocabulary(tokenizer_or_vocab: object) -> Vocabulary:
 
 
 class RegexLogitsProcessor:
-    """Constrain generation to ``pattern``. One instance per ``generate`` call."""
+    """Constrain generation to ``pattern``. One instance per ``generate`` call.
+
+    With ``soft_k`` set, hard masking is replaced by a k-step soft-lookahead
+    bias (``alpha`` scales it; ``alpha=0`` is plain masking) -- steers away from
+    valid-but-dead-end tokens and prunes tokens with no valid token continuation.
+    """
 
     def __init__(
         self,
@@ -42,9 +47,16 @@ class RegexLogitsProcessor:
         *,
         device: torch.device | str = "cpu",
         neg_inf: float = float("-inf"),
+        soft_k: int | None = None,
+        alpha: float = 1.0,
     ) -> None:
         vocab = _as_vocabulary(tokenizer)
-        self._fsa: FsaTensors = FsaTensors.build(pattern, vocab).to(device)
+        fsa = FsaTensors.build(pattern, vocab)
+        self._soft = soft_k is not None
+        self._alpha = alpha
+        if self._soft:
+            fsa = fsa.with_lookahead(soft_k)
+        self._fsa: FsaTensors = fsa.to(device)
         self._neg_inf = neg_inf
         self._batch: ConstraintBatch | None = None
         self._rows: list[int] = []
@@ -75,12 +87,25 @@ class RegexLogitsProcessor:
             last = input_ids[:, -1]
             self._batch.commit(self._rows, last)
 
+        v = self._fsa.vocab_size
+
+        def _mask(x: torch.Tensor) -> None:
+            # a model may have more logit columns than real tokens (padded
+            # lm_head); those extras can never be valid.
+            if x.shape[1] > v:
+                x[:, v:] = self._neg_inf
+            view = x[:, :v]
+            if self._soft:
+                self._batch.apply_soft(self._rows, view, self._alpha)
+            else:
+                self._batch.apply_mask(self._rows, view, self._neg_inf)
+
         if scores.dtype == torch.float32:
-            self._batch.apply_mask(self._rows, scores, self._neg_inf)
+            _mask(scores)
             return scores
         # some models hand the processor half-precision logits
         work = scores.float()
-        self._batch.apply_mask(self._rows, work, self._neg_inf)
+        _mask(work)
         scores.copy_(work)
         return scores
 

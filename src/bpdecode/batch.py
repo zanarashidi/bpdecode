@@ -25,7 +25,7 @@ from collections.abc import Hashable, Sequence
 
 import torch
 
-from .ops import FsaTensors, advance_state, apply_mask_
+from .ops import FsaTensors, advance_state, apply_mask_, apply_soft_
 from .tokenizer import Vocabulary
 
 FREE = -2  # slot holds no sequence
@@ -187,6 +187,20 @@ class ConstraintBatch:
             self.cache.apply(states, logits, neg_inf)
         else:
             apply_mask_(logits, self.fsa, states, neg_inf)
+        return logits
+
+    def apply_soft(
+        self,
+        seq_ids: Sequence[Hashable],
+        logits: torch.Tensor,
+        alpha: float = 1.0,
+    ) -> torch.Tensor:
+        """In place: add ``alpha * lookahead[state]`` per row (and mask, since
+        disallowed entries are ``-inf``). Needs ``fsa`` built with a lookahead
+        table -- see :meth:`FsaTensors.with_lookahead`.
+        """
+        states = self._state[self._slots(seq_ids)]
+        apply_soft_(logits, self.fsa, states, alpha)
         return logits
 
     def commit(

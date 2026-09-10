@@ -32,7 +32,16 @@ def accepts(pattern: str, text: str) -> bool:
         ("[0-9]+", "12a", False),
         ("[^0-9]+", "abc", True),
         ("[^0-9]+", "ab1", False),
-        (r"\d{0,0}", "", None),  # counted repetition -> syntax error
+        (r"[0-9]{3}", "123", True),
+        (r"[0-9]{3}", "12", False),
+        (r"[0-9]{3}", "1234", False),
+        (r"a{2,4}", "a", False),
+        (r"a{2,4}", "aaa", True),
+        (r"a{2,4}", "aaaaa", False),
+        (r"x{2,}z", "xxxxz", True),
+        (r"x{0,2}z", "z", True),
+        (r"\d{4}-\d{2}", "2024-11", True),
+        (r"a{4,2}", "", None),  # n < m -> syntax error
         (r"-?[0-9]+(\.[0-9]+)?", "-3.14", True),
         (r"-?[0-9]+(\.[0-9]+)?", "42", True),
         (r"-?[0-9]+(\.[0-9]+)?", "3.", False),
