@@ -13,7 +13,7 @@ capped; genuinely ambiguous grammars can blow the config-set cap.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from .ir import Grammar
 from .nfa import RuleNFA, compile_rules
@@ -91,6 +91,9 @@ class CompiledGrammar:
     rules: dict[str, RuleNFA]
     root: str
     coreachable: dict[str, frozenset[int]]
+    # memos shared by every PDA over this grammar
+    transition_memo: dict = field(default_factory=dict)  # closure + byte transition
+    mask_memo: dict = field(default_factory=dict)  # (vocab id, config-set) -> token ids
 
     @classmethod
     def build(cls, grammar: Grammar) -> CompiledGrammar:
@@ -110,6 +113,9 @@ class PDA:
         self.g = compiled
         self.max_depth = max_depth
         self.max_configs = max_configs
+        # transitions are pure given the grammar; share the memo across PDAs of
+        # the same compiled grammar so a fresh per-request PDA starts warm.
+        self._memo = compiled.transition_memo
         start = self.g.rules[self.g.root].start
         self._configs: frozenset[Config] = self._close(
             frozenset({((self.g.root, start),)})
@@ -128,6 +134,14 @@ class PDA:
 
     # --- epsilon closure -----------------------------------------------
     def _close(self, configs: frozenset[Config]) -> frozenset[Config]:
+        cached = self._memo.get(("c", configs))
+        if cached is not None:
+            return cached
+        result = self._close_uncached(configs)
+        self._memo[("c", configs)] = result
+        return result
+
+    def _close_uncached(self, configs: frozenset[Config]) -> frozenset[Config]:
         out: set[Config] = set()
         work = list(configs)
         while work:
@@ -165,16 +179,25 @@ class PDA:
 
     # --- stepping ----------------------------------------------------
     def advance_byte(self, b: int) -> bool:
-        nxt: set[Config] = set()
-        for cfg in self._configs:
-            if not cfg:
-                continue
-            rule, state = cfg[-1]
-            for label, dst in self.g.rules[rule].out(state):
-                if label is not None and label[0] == "byte" and label[1] <= b <= label[2]:
-                    nxt.add((*cfg[:-1], (rule, dst)))
-        self._configs = self._close(frozenset(nxt))
-        return not self.dead()
+        key = ("t", self._configs, b)
+        nxt = self._memo.get(key)
+        if nxt is None:
+            raw: set[Config] = set()
+            for cfg in self._configs:
+                if not cfg:
+                    continue
+                rule, state = cfg[-1]
+                for label, dst in self.g.rules[rule].out(state):
+                    if (
+                        label is not None
+                        and label[0] == "byte"
+                        and label[1] <= b <= label[2]
+                    ):
+                        raw.add((*cfg[:-1], (rule, dst)))
+            nxt = self._close(frozenset(raw))
+            self._memo[key] = nxt
+        self._configs = nxt
+        return bool(nxt)
 
     def first_byte_ranges(self) -> list[tuple[int, int]]:
         ranges: list[tuple[int, int]] = []

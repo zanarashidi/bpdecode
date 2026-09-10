@@ -160,9 +160,18 @@ CUDA kernels -- written, run only on GPU CI (`.github/workflows/gpu.yml`,
       boolean / null, enum, const, anyOf / oneOf, local `$ref` into `$defs`.
       Fixed property order (sound, not complete). Soundness tested vs the
       `jsonschema` library.
+- [x] token trie + mask memo (`grammar/tokentrie.py`): DFS a byte trie of the
+      vocab against the PDA, pruning dead subtrees; results memoised on the
+      compiled grammar keyed by config-set. First constrained generation with
+      a new grammar warms the cache (~0.4 s for a JSON object); the rest are
+      ~free.
+- [x] `GrammarLogitsProcessor` (`hf.py`) + `.from_json_schema` -- per-row
+      `CFGConstraint`, drops into `model.generate()`. Tested vs `CFGConstraint`
+      step by step; generates valid JSON.
 - [ ] persistent per-request execution stack; `compute_mask_pda` /
       `advance_state_pda` GPU kernels (push / pop, depth cap).
-- [ ] context-dependent token split (context-independent mask precompute).
+- [ ] context-independent token split (precompute the mask per NFA state,
+      ignoring the stack -- the XGrammar trick; makes the cold path fast).
 - [ ] benchmark vs XGrammar, llguidance; extra cross-check vs `lark`.
 
 ### Phase 4 -- soft lookahead (novel)

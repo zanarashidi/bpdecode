@@ -17,6 +17,7 @@ from ..tokenizer import Vocabulary
 from .gbnf import parse_gbnf
 from .ir import Grammar
 from .pda import PDA, CompiledGrammar
+from .tokentrie import token_trie
 
 
 class CFGConstraint(BaseConstraint):
@@ -47,6 +48,7 @@ class CFGConstraint(BaseConstraint):
         obj._pda = PDA(compiled, max_depth=max_depth)
         obj._token_bytes = list(vocab.token_bytes)
         obj._history = []
+        obj._mask_cache = {}
         return obj
 
     @property
@@ -89,7 +91,12 @@ class CFGConstraint(BaseConstraint):
         self._history.append(token_id)
 
     def allowed_ids(self) -> frozenset[int]:
-        ids = {t for t in range(self._vocab.size) if self.accepts(t)}
-        if self._vocab.eos_id is not None and self.is_complete():
-            ids.add(self._vocab.eos_id)
-        return frozenset(ids)
+        # the mask is a pure function of (vocab, config-set); shared across every
+        # request on this grammar, and stable inside a string / other loop.
+        memo = self._compiled.mask_memo
+        key = (id(self._vocab), self._pda.configs)
+        hit = memo.get(key)
+        if hit is None:
+            hit = frozenset(token_trie(self._vocab).allowed(self._pda))
+            memo[key] = hit
+        return hit
