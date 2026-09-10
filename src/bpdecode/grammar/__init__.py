@@ -1,0 +1,23 @@
+"""Context-free grammar constrained decoding (Phase 3).
+
+* :mod:`~bpdecode.grammar.gbnf` -- parse GBNF source to a :class:`Grammar`
+* :mod:`~bpdecode.grammar.ir` -- the grammar IR (regex AST + :class:`Ref`)
+"""
+
+from __future__ import annotations
+
+from .constraint import CFGConstraint
+from .gbnf import GBNFSyntaxError, parse_gbnf
+from .ir import Grammar, Ref
+from .pda import PDA, CompiledGrammar, PDAOverflow
+
+__all__ = [
+    "CFGConstraint",
+    "CompiledGrammar",
+    "GBNFSyntaxError",
+    "Grammar",
+    "PDA",
+    "PDAOverflow",
+    "Ref",
+    "parse_gbnf",
+]

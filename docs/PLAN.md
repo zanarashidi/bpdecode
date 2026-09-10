@@ -36,6 +36,8 @@ src/bpdecode/     host front-end (Python): regex/PDA compilers, TokenDFA,
   batch.py                     GrammarCache / ConstraintBatch / MaskCache
   hf.py                        transformers RegexLogitsProcessor
   vllm.py                      vLLM request- / batch-level logits processors
+  grammar/                     GBNF -> IR -> rule NFAs -> config-set PDA;
+                               CFGConstraint (CPU oracle for CFGs)
 csrc/             C++/CUDA core: FsaTable/TokenSymbols ABI, mask kernels
   include/bpdecode/mask.hpp    the ABI callers compile against
   src/mask_cpu.cpp             scalar reference + build_reachability
@@ -140,13 +142,23 @@ CUDA kernels -- written, run only on GPU CI (`.github/workflows/gpu.yml`,
       GPU-batch rerun pending.
 - [ ] end-to-end demo (Qwen2.5-0.5B) -- after the remaining phases.
 
-### Phase 3 -- CFG / pushdown (JSON Schema, GBNF)
+### Phase 3 -- CFG / pushdown (JSON Schema, GBNF) *(in progress)*
 
-- EBNF -> PDA compiler; JSON Schema -> EBNF
-- persistent per-request execution stack in global memory (depth cap)
-- `compute_mask_pda` / `advance_state_pda` (push / pop)
-- context-dependent tokens (one BPE token spanning multiple terminals)
-- correctness vs `lark`; benchmark vs XGrammar, llguidance
+- [x] GBNF front-end: `bpdecode.grammar` -- `parse_gbnf` -> `Grammar` IR
+      (regex AST + `Ref`); `{m,n}` sugar expanded; `Grammar.is_regular()`.
+- [x] rule NFAs: each rule -> byte-level NFA over `{byte-range, call(rule)}`
+      edges (`grammar/nfa.py`, reuses the UTF-8 lowering).
+- [x] config-set PDA (`grammar/pda.py`): runtime state is a set of stacks,
+      epsilon-closure resolves call/return/eps to a fixpoint; per-rule
+      co-reachability prune; depth + config-set caps.
+- [x] `CFGConstraint` (`grammar/constraint.py`): CPU oracle, `accepts` /
+      `advance` / `allowed_ids` by byte simulation. Validated against an
+      independent recursive grammar matcher + brute-force token differential.
+- [ ] JSON Schema -> `Grammar` (subset).
+- [ ] persistent per-request execution stack; `compute_mask_pda` /
+      `advance_state_pda` GPU kernels (push / pop, depth cap).
+- [ ] context-dependent token split (context-independent mask precompute).
+- [ ] benchmark vs XGrammar, llguidance; extra cross-check vs `lark`.
 
 ### Phase 4 -- soft lookahead (novel)
 
