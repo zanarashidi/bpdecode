@@ -91,14 +91,19 @@ for `{"name": "...", "year": N}`. `k = 3` backward steps.
 | name `{1,30}` | hard | 1.00 | 11.6 | 0.10 |
 | name `{1,30}` | soft α=+0.5 | 1.00 | 28.7 | 0.30 |
 | name `{1,30}` | soft α=+1.0 | 1.00 | 28.9 | 0.40 |
-| name `{1,30}` | soft α=-0.3 | 1.00 | 6.4 | 0.00 |
-| name `{1,30}` | soft α=-1.0 | 1.00 | 4.4 | 0.00 |
-| name `[A-Za-z .]+` (unbounded) | hard | 1.00 | 10.0 | 0.10 |
+| name `{1,30}` | soft α=-0.3 | 1.00 | 7.4 | 0.00 |
+| name `{1,30}` | soft α=-1.0 | 1.00 | 17.3 | 0.00 |
+| name `[A-Za-z .]+` (unbounded) | hard | 1.00 | 11.6 | 0.10 |
 | name `[A-Za-z .]+` | soft α=+0.5 | **0.00** | -- | -- |
-| name `[A-Za-z .]+` | soft α=-0.3 | 1.00 | 6.4 | 0.00 |
+| name `[A-Za-z .]+` | soft α=+1.0 | **0.00** | -- | -- |
+| name `[A-Za-z .]+` | soft α=-0.3 | 1.00 | 7.4 | 0.00 |
+| name `[A-Za-z .]+` | soft α=-1.0 | 1.00 | 4.5 | 0.00 |
 
-Sample names (unbounded): hard -> `Louis Armstrong`, `Mont Blanc`, `Bubo bubo`;
-α=+1.0 -> `Mont Blanc  romeo  romeo  romeo`; α=-1.0 -> `Louis`, `Mount`, `B.`
+Sample names (unbounded): hard -> `Louis Armstrong`, `Mont Blanc`, `Python`;
+α=+1.0 -> `Mont Blanc  romeo  romeo  romeo`; α=-1.0 -> `Louis`, `Mount`, `Python`.
+(α=-1.0 on the *bounded* pattern occasionally lets a single long degenerate
+token through -- `NavigationItemSelectedListener` -- since a strong terseness
+bias with only one long completing token still admits it.)
 
 ## Reading -- the hypothesis does not hold
 
