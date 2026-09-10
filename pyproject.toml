@@ -21,7 +21,7 @@ dependencies = ["torch>=2.2"]
 [project.optional-dependencies]
 hf = ["transformers>=4.40", "tokenizers>=0.19"]
 bench = ["transformers>=4.40", "outlines>=1.0"]
-dev = ["pytest>=8", "ruff>=0.6", "numpy", "lark>=1.1"]
+dev = ["pytest>=8", "ruff>=0.6", "numpy", "lark>=1.1", "jsonschema>=4"]
 
 [tool.scikit-build]
 wheel.packages = ["src/bpdecode"]

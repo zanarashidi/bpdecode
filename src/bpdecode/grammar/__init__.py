@@ -9,6 +9,7 @@ from __future__ import annotations
 from .constraint import CFGConstraint
 from .gbnf import GBNFSyntaxError, parse_gbnf
 from .ir import Grammar, Ref
+from .json_schema import JsonSchemaError, json_schema_to_grammar
 from .pda import PDA, CompiledGrammar, PDAOverflow
 
 __all__ = [
@@ -16,8 +17,10 @@ __all__ = [
     "CompiledGrammar",
     "GBNFSyntaxError",
     "Grammar",
+    "JsonSchemaError",
     "PDA",
     "PDAOverflow",
     "Ref",
+    "json_schema_to_grammar",
     "parse_gbnf",
 ]

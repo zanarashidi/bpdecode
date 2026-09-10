@@ -154,7 +154,12 @@ CUDA kernels -- written, run only on GPU CI (`.github/workflows/gpu.yml`,
 - [x] `CFGConstraint` (`grammar/constraint.py`): CPU oracle, `accepts` /
       `advance` / `allowed_ids` by byte simulation. Validated against an
       independent recursive grammar matcher + brute-force token differential.
-- [ ] JSON Schema -> `Grammar` (subset).
+- [x] JSON Schema -> `Grammar` (`grammar/json_schema.py`): object
+      (properties / required / additionalProperties), array (items /
+      min-maxItems), string (pattern / min-maxLength), number / integer /
+      boolean / null, enum, const, anyOf / oneOf, local `$ref` into `$defs`.
+      Fixed property order (sound, not complete). Soundness tested vs the
+      `jsonschema` library.
 - [ ] persistent per-request execution stack; `compute_mask_pda` /
       `advance_state_pda` GPU kernels (push / pop, depth cap).
 - [ ] context-dependent token split (context-independent mask precompute).
