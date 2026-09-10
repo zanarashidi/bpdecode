@@ -1,0 +1,32 @@
+name: release
+
+# Build the source distribution on a tag and attach it to the GitHub release.
+# The wheel is a torch C++ extension -- it has to be built against the user's
+# own torch (one wheel per python x torch x CUDA combination), so we ship the
+# sdist and let `pip install` compile it. `pip install bpdecode` needs a C++
+# toolchain + `pip install torch` first.
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+jobs:
+  sdist:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install build
+      - run: python -m build --sdist
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sdist
+          path: dist/*.tar.gz
+      - name: Attach to release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*.tar.gz

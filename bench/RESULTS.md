@@ -1,3 +1,23 @@
+# Summary
+
+All CPU, `Qwen/Qwen2.5-0.5B` tokenizer (~151k tokens). Numbers are per token
+per sequence.
+
+| | compile | per-token mask (steady state) | correctness |
+|---|---|---|---|
+| **regex** vs `outlines_core` | ~17 ms (parity) | dense **~90-140 µs**, beats Outlines on non-trivial patterns | identical allowed sets |
+| **JSON Schema** vs `xgrammar` / `llguidance` | ~1 ms | memoised **~0.6 µs** -- ~14x under xgrammar, ~70x under llguidance | valid, tested vs `jsonschema` |
+| **soft lookahead** | -- | -- | **negative result**: count-based weighting over-extends, doesn't beat hard masking |
+
+The steady-state numbers assume a warm cache: the first request with a new
+grammar pays ~0.2 s, and a token trie is built once per vocabulary (~0.5 s).
+Both are one-time and shared across all requests. GPU numbers pending
+(`scripts/gpu_check.sh` on a pod).
+
+Detail follows.
+
+---
+
 # regex_mask.py -- recorded run
 
 `Qwen/Qwen2.5-0.5B` tokenizer (V = 151 643), **CPU** (Apple M-series),
