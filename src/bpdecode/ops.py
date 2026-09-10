@@ -49,6 +49,8 @@ class FsaTensors:
         return self.trans.device
 
     def to(self, device: torch.device | str) -> FsaTensors:
+        if self.trans.device == torch.device(device):
+            return self
         return FsaTensors(
             self.trans.to(device),
             self.accept.to(device),

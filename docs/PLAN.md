@@ -35,6 +35,7 @@ src/bpdecode/     host front-end (Python): regex/PDA compilers, TokenDFA,
   ops.py                      torch.ops.bpdecode.* wrappers (FsaTensors bundle)
   batch.py                     GrammarCache / ConstraintBatch / MaskCache
   hf.py                        transformers RegexLogitsProcessor
+  vllm.py                      vLLM request- / batch-level logits processors
 csrc/             C++/CUDA core: FsaTable/TokenSymbols ABI, mask kernels
   include/bpdecode/mask.hpp    the ABI callers compile against
   src/mask_cpu.cpp             scalar reference + build_reachability
@@ -119,8 +120,14 @@ CUDA kernels -- written, run only on GPU CI (`.github/workflows/gpu.yml`,
       allow-sets (context-independent), stored as token-id lists so it stays
       kilobytes at 150k vocab. `ConstraintBatch(mask_cache=True)` -> a hit is a
       gather+scatter, no kernel launch.
-- [ ] vLLM adapter (its logits-processor plugin API); end-to-end demo.
-- [ ] benchmark vs Outlines (tokens/s, per-token mask overhead).
+- [x] vLLM adapter: `bpdecode.vllm` -- `RegexLogitsProcessor` (request-level,
+      `SamplingParams(logits_processors=[...])`) + `RegexLogitsProcessorFactory`
+      (grammar sharing); `BatchConstraintState` is the state machine for a V1
+      batch-level `LogitsProcessor` (add/remove/move/advance/mask over
+      `ConstraintBatch`). Tested with synthetic inputs; not yet run against a
+      live vLLM engine.
+- [ ] end-to-end demo (Qwen2.5-0.5B); benchmark vs Outlines (tokens/s,
+      per-token mask overhead).
 
 ### Phase 3 -- CFG / pushdown (JSON Schema, GBNF)
 
