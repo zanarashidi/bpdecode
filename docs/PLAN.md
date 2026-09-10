@@ -217,13 +217,18 @@ Also this phase: regex parser gained `{m,n}` counted repetition;
 
 - [x] examples: `examples/generate_hf.py` (regex + JSON Schema constrained HF
       generation), `examples/serve_batch.py` (continuous-batching loop).
-- [ ] README refresh + a "how it works" doc.
-- [ ] `cibuildwheel` wheels (CPU + CUDA variants) / sdist.
-- [ ] consolidated benchmark report (`bench/RESULTS.md` is the raw material).
-- [ ] **GPU (pod):** rerun all benches `--device cuda`; kernel stream overlap
-      (drop the `cudaStreamSynchronize`, overlap the mask with the forward
-      pass); persistent constraint kernel; Nsight tuning.
-- [ ] multi-GPU (shard by request -- state is tiny).
+- [x] README refresh + a "how it works" section; `bench/RESULTS.md` summary.
+- [x] native extension optional at import (dense torch path covers CPU + GPU
+      regex / JSON-Schema masking; the `_C` ops are for non-dense / raw API).
+- [x] `release.yml` -- sdist on tag (the wheel is a torch extension, one build
+      per python x torch x CUDA, so pip compiles it against the user's torch).
+- [x] kernel stream overlap: the per-step CUDA entry points no longer sync;
+      `torch_ops.cpp` runs them on `getCurrentCUDAStream()`. **Needs a pod to
+      re-validate `tests/test_cuda.py`.**
+- [ ] **GPU (pod):** run `scripts/gpu_check.sh` -- re-validate the kernels and
+      record `--device cuda` bench numbers.
+- [ ] persistent constraint kernel; Nsight tuning; multi-GPU (shard by
+      request -- state is tiny). Serving-integration work, lower priority.
 
 ## Key risks
 
