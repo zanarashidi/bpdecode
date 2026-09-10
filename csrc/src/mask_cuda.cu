@@ -1,19 +1,154 @@
-// Phase 1 lands the real batched kernel here: one warp per request, __ballot_sync
-// to pack 32 tokens per uint32 word, transition table in shared/constant memory,
-// overlapped with the model forward pass on a caller-supplied stream.
+// Batched constraint-mask kernels.
 //
-// For now this is a straight device port of the scalar reference so the CUDA
-// build path stays green and the ABI is exercised end to end.
+// Layout / modernization choices (see docs/PLAN.md):
+//   * one warp per request, lanes stride over the vocab
+//   * __ballot_sync packs 32 token verdicts into one uint32 mask word
+//   * transition table read straight from (managed) global memory as SoA
+//   * caller-supplied stream so the mask compute overlaps the model forward pass
+//
+// The FsaTable / TokenSymbols passed here hold pointers that must be
+// device-accessible (cudaMallocManaged in the tests / upload path). Only the
+// scalar POD fields and the array contents are touched from the device.
 #include "bpdecode/mask.hpp"
+
+#include <cstdio>
 
 namespace bpdecode {
 
+namespace {
+
+constexpr int kWarp = 32;
+
+__device__ inline int32_t step_device(const int32_t* trans, int32_t num_symbols,
+                                      int32_t num_states, const uint8_t* live,
+                                      int32_t dead, const int32_t* offsets,
+                                      const int32_t* symbols, int32_t eos_id,
+                                      const uint8_t* accept, int32_t state,
+                                      int32_t token_id) {
+  if (token_id == eos_id) {
+    return (state >= 0 && accept[state]) ? state : -1;
+  }
+  if (state < 0) return -1;
+  int32_t cur = state;
+  const int32_t begin = offsets[token_id];
+  const int32_t end = offsets[token_id + 1];
+  for (int32_t i = begin; i < end; ++i) {
+    const int32_t sym = symbols[i];
+    if (sym < 0 || sym >= num_symbols) return -1;
+    cur = trans[static_cast<int64_t>(cur) * num_symbols + sym];
+    if (cur == dead) return -1;
+  }
+  (void)num_states;
+  return live[cur] ? cur : -1;
+}
+
+// grid.x == batch, one warp per block. Each lane owns tokens {lane, lane+32,...}
+// and contributes its bit into the packed word via __ballot_sync.
+__global__ void compute_mask_kernel(const int32_t* trans, int32_t num_symbols,
+                                    int32_t num_states, const uint8_t* accept,
+                                    const uint8_t* live, int32_t dead,
+                                    const int32_t* offsets,
+                                    const int32_t* symbols, int32_t vocab_size,
+                                    int32_t eos_id, const int32_t* states,
+                                    uint32_t* out_bits, int32_t words_per_row) {
+  const int32_t req = blockIdx.x;
+  const int32_t lane = threadIdx.x;  // blockDim.x == 32
+  const int32_t state = states[req];
+  uint32_t* row = out_bits + static_cast<int64_t>(req) * words_per_row;
+
+  for (int32_t word = 0; word * kWarp < vocab_size; ++word) {
+    const int32_t tok = word * kWarp + lane;
+    bool ok = false;
+    if (tok < vocab_size) {
+      ok = step_device(trans, num_symbols, num_states, live, dead, offsets,
+                       symbols, eos_id, accept, state, tok) != -1;
+    }
+    const uint32_t packed = __ballot_sync(0xFFFFFFFFu, ok);
+    if (lane == 0) row[word] = packed;
+  }
+
+  // EOS may sit anywhere in the vocab; make sure its bit reflects `accept`.
+  if (lane == 0 && eos_id >= 0 && state >= 0 && accept[state]) {
+    row[eos_id >> 5] |= (1u << (eos_id & 31));
+  }
+}
+
+// One thread per state. Repeatedly OR in successors' liveness until no thread
+// flips a bit this round (fixpoint) -- the boolean BP loop, CUDA-graph friendly.
+__global__ void reachability_step_kernel(int32_t num_states, int32_t num_symbols,
+                                         const int32_t* trans,
+                                         const uint8_t* accept, uint8_t* live,
+                                         int32_t* changed) {
+  const int32_t s = blockIdx.x * blockDim.x + threadIdx.x;
+  if (s >= num_states) return;
+  if (live[s]) return;
+  uint8_t v = accept[s];
+  if (!v) {
+    const int64_t base = static_cast<int64_t>(s) * num_symbols;
+    for (int32_t k = 0; k < num_symbols && !v; ++k) {
+      const int32_t t = trans[base + k];
+      if (t >= 0 && t < num_states && live[t]) v = 1;
+    }
+  }
+  if (v) {
+    live[s] = 1;
+    *changed = 1;
+  }
+}
+
+inline void check(cudaError_t e, const char* what) {
+  if (e != cudaSuccess) {
+    std::fprintf(stderr, "bpdecode CUDA: %s: %s\n", what, cudaGetErrorString(e));
+  }
+}
+
+}  // namespace
+
+void build_reachability_cuda(int32_t num_states, int32_t num_symbols,
+                             const int32_t* trans_device,
+                             const uint8_t* accept_device, uint8_t* live_device,
+                             void* stream) {
+  auto s = static_cast<cudaStream_t>(stream);
+  check(cudaMemsetAsync(live_device, 0, static_cast<size_t>(num_states), s),
+        "memset live");
+
+  int32_t* changed = nullptr;
+  check(cudaMallocAsync(&changed, sizeof(int32_t), s), "alloc flag");
+
+  const int32_t block = 256;
+  const int32_t grid = (num_states + block - 1) / block;
+  int32_t host_changed = 1;
+  // Bounded by the automaton diameter; num_states is a safe hard cap.
+  for (int32_t iter = 0; iter < num_states && host_changed; ++iter) {
+    check(cudaMemsetAsync(changed, 0, sizeof(int32_t), s), "reset flag");
+    reachability_step_kernel<<<grid, block, 0, s>>>(
+        num_states, num_symbols, trans_device, accept_device, live_device,
+        changed);
+    check(cudaMemcpyAsync(&host_changed, changed, sizeof(int32_t),
+                          cudaMemcpyDeviceToHost, s),
+          "copy flag");
+    check(cudaStreamSynchronize(s), "sync");
+  }
+  check(cudaFreeAsync(changed, s), "free flag");
+}
+
 void compute_mask_batch_cuda(const FsaTable& fsa, const TokenSymbols& toks,
                              const int32_t* states, int32_t batch,
-                             uint32_t* out_bits, void* /*stream*/) {
-  // TODO(phase-1): real device kernel. Fall back to host logic on the data as
-  // uploaded; callers currently pass host-accessible (managed) pointers in tests.
-  compute_mask_batch(fsa, toks, states, batch, out_bits);
+                             uint32_t* out_bits, void* stream) {
+  if (batch <= 0) return;
+  const int32_t words_per_row = (toks.vocab_size + 31) / 32;
+  auto s = static_cast<cudaStream_t>(stream);
+
+  check(cudaMemsetAsync(out_bits, 0,
+                        static_cast<size_t>(batch) * words_per_row *
+                            sizeof(uint32_t),
+                        s),
+        "memset mask");
+  compute_mask_kernel<<<batch, kWarp, 0, s>>>(
+      fsa.trans.data(), fsa.num_symbols, fsa.num_states, fsa.accept.data(),
+      fsa.live.data(), fsa.dead, toks.offsets.data(), toks.symbols.data(),
+      toks.vocab_size, toks.eos_id, states, out_bits, words_per_row);
+  check(cudaStreamSynchronize(s), "sync");
 }
 
 }  // namespace bpdecode

@@ -37,6 +37,32 @@ TokenSymbols make_toks() {
 
 }  // namespace
 
+TEST(Reachability, MarksOnlyStatesThatCanAccept) {
+  auto f = make_ab_fsa();
+  f.live.clear();
+  build_reachability(f);
+  ASSERT_EQ(f.live.size(), 4u);
+  EXPECT_EQ(f.live[0], 1);  // s0 -a-> s1 -b-> s2(accept)
+  EXPECT_EQ(f.live[1], 1);
+  EXPECT_EQ(f.live[2], 1);  // accepting
+  EXPECT_EQ(f.live[3], 0);  // dead
+}
+
+TEST(Reachability, DeadEndBranchIsNotLive) {
+  // s0 --0--> s1(accept);  s0 --1--> s2 --*--> s2 (trap, never accepts)
+  FsaTable f;
+  f.num_states = 3;
+  f.num_symbols = 2;
+  f.start = 0;
+  f.dead = 2;
+  f.trans = {1, 2, 1, 1, 2, 2};
+  f.accept = {0, 1, 0};
+  build_reachability(f);
+  EXPECT_EQ(f.live[0], 1);
+  EXPECT_EQ(f.live[1], 1);
+  EXPECT_EQ(f.live[2], 0);
+}
+
 TEST(Step, WalksAndRejects) {
   auto f = make_ab_fsa();
   auto t = make_toks();

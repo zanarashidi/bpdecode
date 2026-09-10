@@ -62,13 +62,20 @@ tests/            differential tests vs the CPU reference; fuzzing
 - [x] CPU reference `RegexConstraint` + brute-force differential tests
 - [x] C++ ABI (`FsaTable`, `TokenSymbols`) + scalar `compute_mask*` + gtests
 
-### Phase 1 -- FSA path, single request, GPU mask
+### Phase 1 -- FSA path, single request, GPU mask *(in progress)*
 
-- byte-DFA x tokenizer product -> token-level DFA on the host; upload as CSR
-- `build_reachability` kernel (boolean BP to fixpoint -- ported from `sp.cu`)
-- `compute_mask_fsa` + `advance_state` kernels; fused `apply_mask` (Triton/CUDA)
-- scikit-build-core: compile `csrc` into the wheel; `torch.ops.bpdecode.*`
-- correctness: CUDA vs CPU reference over a regex suite
+- [x] host FSA export: `bpdecode.fsa` flattens DFA + vocab into `FsaTable` /
+      `TokenSymbols` (the C++ ABI, POD arrays ready for CSR upload) + a scalar
+      `step` / `compute_mask` mirror, differential-tested vs `TokenDFA`
+- [x] `build_reachability` ported to C++ (`mask_cpu.cpp`, boolean BP fixpoint);
+      `build_reachability_cuda` iterative kernel written (needs a GPU to run)
+- [x] `compute_mask_batch_cuda`: one warp/request, `__ballot_sync` token packing,
+      caller-supplied stream (written; unrun -- no local GPU)
+- [ ] byte-DFA x tokenizer product: move the pipeline off UTF-8/surrogateescape
+      to raw bytes (regex alphabet 0..255, tokens as byte strings) -- **next**
+- [ ] `advance_state` kernel; fused `apply_mask` (Triton/CUDA)
+- [ ] scikit-build-core: compile `csrc` into the wheel; `torch.ops.bpdecode.*`
+- [ ] correctness: CUDA vs CPU reference over a regex suite (on GPU CI)
 
 ### Phase 2 -- batching + serving integration
 

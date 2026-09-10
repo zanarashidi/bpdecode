@@ -9,6 +9,7 @@ in later phases.  See ``docs/PLAN.md`` for the roadmap.
 from __future__ import annotations
 
 from .automaton import TokenDFA
+from .fsa import FsaTable, TokenSymbols, build_reachability, fsa_from_dfa, token_symbols
 from .interface import BaseConstraint, Constraint
 from .reference import RegexConstraint
 from .regex import DFA, RegexSyntaxError, compile_regex
@@ -21,10 +22,15 @@ __all__ = [
     "Constraint",
     "DEFAULT_MODEL",
     "DFA",
+    "FsaTable",
     "RegexConstraint",
     "RegexSyntaxError",
     "TokenDFA",
+    "TokenSymbols",
     "Vocabulary",
+    "build_reachability",
     "compile_regex",
+    "fsa_from_dfa",
+    "token_symbols",
     "__version__",
 ]

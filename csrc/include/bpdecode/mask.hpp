@@ -34,6 +34,12 @@ struct TokenSymbols {
   std::vector<int32_t> symbols;  // offsets.back()
 };
 
+// Backward-reachability solve: fill `fsa.live` so that live[s] == 1 iff some
+// accepting state is reachable from `s`. Boolean message passing to a fixpoint
+// (live[s] |= OR over successors) -- the same pass the BP kernels ran, and the
+// scalar oracle for `build_reachability_cuda`. Resizes `fsa.live` to num_states.
+void build_reachability(FsaTable& fsa);
+
 // Advance one DFA state by one token. Returns the next state, or -1 if the
 // token is not accepted from `state`.
 int32_t step(const FsaTable& fsa, const TokenSymbols& toks, int32_t state,
@@ -57,6 +63,14 @@ void compute_mask_batch_cuda(const FsaTable& fsa_device,
                              const TokenSymbols& toks_device,
                              const int32_t* states_device, int32_t batch,
                              uint32_t* out_bits_device, void* stream);
+
+// Iterative boolean-BP reachability on device. `trans`/`accept` are device
+// pointers of length num_states*num_symbols / num_states; `live_device` (length
+// num_states) is written. Runs live[s] |= OR(live[succ]) to a fixpoint.
+void build_reachability_cuda(int32_t num_states, int32_t num_symbols,
+                             const int32_t* trans_device,
+                             const uint8_t* accept_device,
+                             uint8_t* live_device, void* stream);
 #endif
 
 }  // namespace bpdecode
