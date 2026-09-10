@@ -11,12 +11,15 @@ import pytest
 
 from bpdecode.automaton import DEAD, TokenDFA
 from bpdecode.fsa import (
+    advance_state_batch,
+    apply_mask,
     build_reachability,
     compute_mask,
     fsa_from_dfa,
     step,
     token_symbols,
 )
+from bpdecode.reference import RegexConstraint
 from bpdecode.regex import compile_regex
 from bpdecode.tokenizer import Vocabulary
 
@@ -107,6 +110,51 @@ def test_multibyte_tokens_split_across_the_utf8_automaton() -> None:
     assert tdfa.step(s, 4) != DEAD  # 0xA9 completes é -> accepting
     assert tdfa.step(s, 5) == DEAD  # a second 0xC3A9 pair is not valid here
     assert step(fsa, toks, s, 4) == tdfa.step(s, 4)
+
+
+@pytest.mark.parametrize("pattern", PATTERNS)
+def test_advance_state_batch_matches_reference(pattern: str) -> None:
+    dfa = compile_regex(pattern)
+    fsa = fsa_from_dfa(dfa)
+    toks = token_symbols(dfa, VOCAB)
+    tdfa = TokenDFA(dfa, VOCAB)
+
+    states, token_ids, expected = [], [], []
+    for state in _reachable_states(dfa):
+        for tid in range(VOCAB.size):
+            states.append(state)
+            token_ids.append(tid)
+            ref = tdfa.step(state, tid)
+            expected.append(-1 if ref == DEAD else ref)
+    got = advance_state_batch(fsa, toks, states, token_ids)
+    assert got == expected, pattern
+
+
+@pytest.mark.parametrize("pattern", PATTERNS)
+def test_apply_mask_matches_compute_mask(pattern: str) -> None:
+    dfa = compile_regex(pattern)
+    fsa = fsa_from_dfa(dfa)
+    toks = token_symbols(dfa, VOCAB)
+
+    states = sorted(_reachable_states(dfa))
+    logits = [[0.0] * VOCAB.size for _ in states]
+    apply_mask(fsa, toks, states, logits, neg_inf=float("-inf"))
+    for row, state in zip(logits, states, strict=True):
+        mask = compute_mask(fsa, toks, state)
+        for t in range(VOCAB.size):
+            assert (row[t] == 0.0) == mask[t], (pattern, state, t)
+
+
+def test_apply_mask_agrees_with_regexconstraint() -> None:
+    con = RegexConstraint("-?[0-9]+(\\.[0-9]+)?", VOCAB)
+    con.advance(VOCAB.token_bytes.index(b"1"))
+    dfa = compile_regex("-?[0-9]+(\\.[0-9]+)?")
+    fsa = fsa_from_dfa(dfa)
+    toks = token_symbols(dfa, VOCAB)
+
+    ref = con.apply_([0.0] * VOCAB.size)
+    got = apply_mask(fsa, toks, [con.state], [[0.0] * VOCAB.size])[0]
+    assert got == ref
 
 
 def test_eos_only_at_accepting_states() -> None:

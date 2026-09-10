@@ -56,6 +56,22 @@ void compute_mask_batch(const FsaTable& fsa, const TokenSymbols& toks,
                         const int32_t* states, int32_t batch,
                         uint32_t* out_bits);
 
+// Advance one state per request by the token that was actually sampled.
+// next_states[b] = step(fsa, toks, states[b], token_ids[b]); a value of -1 means
+// the sampled token was not on a grammar-valid path (mask bypassed) -- callers
+// should treat that request as broken. EOS leaves the state unchanged.
+void advance_state_batch(const FsaTable& fsa, const TokenSymbols& toks,
+                         const int32_t* states, const int32_t* token_ids,
+                         int32_t batch, int32_t* next_states);
+
+// Fused mask + logit bias: logits is row-major [batch, vocab_size]; for each
+// request every token not allowed from states[b] is set to `neg_inf`. Skips the
+// bitset round-trip. `neg_inf` is caller-chosen (-INFINITY, or a large finite
+// negative for fp16-safe softmax).
+void apply_mask_batch(const FsaTable& fsa, const TokenSymbols& toks,
+                      const int32_t* states, int32_t batch, float* logits,
+                      float neg_inf);
+
 #ifdef BPDECODE_WITH_CUDA
 // Phase 1: same contract, device pointers. Declared now so callers can compile
 // against the final ABI.
@@ -71,6 +87,17 @@ void build_reachability_cuda(int32_t num_states, int32_t num_symbols,
                              const int32_t* trans_device,
                              const uint8_t* accept_device,
                              uint8_t* live_device, void* stream);
+
+void advance_state_batch_cuda(const FsaTable& fsa_device,
+                              const TokenSymbols& toks_device,
+                              const int32_t* states_device,
+                              const int32_t* token_ids_device, int32_t batch,
+                              int32_t* next_states_device, void* stream);
+
+void apply_mask_batch_cuda(const FsaTable& fsa_device,
+                           const TokenSymbols& toks_device,
+                           const int32_t* states_device, int32_t batch,
+                           float* logits_device, float neg_inf, void* stream);
 #endif
 
 }  // namespace bpdecode

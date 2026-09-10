@@ -96,6 +96,42 @@ __global__ void reachability_step_kernel(int32_t num_states, int32_t num_symbols
   }
 }
 
+// One thread per request: commit the sampled token, write the next state.
+__global__ void advance_state_kernel(const int32_t* trans, int32_t num_symbols,
+                                     int32_t num_states, const uint8_t* accept,
+                                     const uint8_t* live, int32_t dead,
+                                     const int32_t* offsets,
+                                     const int32_t* symbols, int32_t eos_id,
+                                     const int32_t* states,
+                                     const int32_t* token_ids, int32_t batch,
+                                     int32_t* next_states) {
+  const int32_t b = blockIdx.x * blockDim.x + threadIdx.x;
+  if (b >= batch) return;
+  next_states[b] = step_device(trans, num_symbols, num_states, live, dead,
+                               offsets, symbols, eos_id, accept, states[b],
+                               token_ids[b]);
+}
+
+// One warp per request, lanes stride the vocab: push every disallowed logit to
+// neg_inf in place. Fused -- no bitset materialised.
+__global__ void apply_mask_kernel(const int32_t* trans, int32_t num_symbols,
+                                  int32_t num_states, const uint8_t* accept,
+                                  const uint8_t* live, int32_t dead,
+                                  const int32_t* offsets, const int32_t* symbols,
+                                  int32_t vocab_size, int32_t eos_id,
+                                  const int32_t* states, float* logits,
+                                  float neg_inf) {
+  const int32_t req = blockIdx.x;
+  const int32_t state = states[req];
+  float* row = logits + static_cast<int64_t>(req) * vocab_size;
+  for (int32_t tok = threadIdx.x; tok < vocab_size; tok += blockDim.x) {
+    if (step_device(trans, num_symbols, num_states, live, dead, offsets, symbols,
+                    eos_id, accept, state, tok) == -1) {
+      row[tok] = neg_inf;
+    }
+  }
+}
+
 inline void check(cudaError_t e, const char* what) {
   if (e != cudaSuccess) {
     std::fprintf(stderr, "bpdecode CUDA: %s: %s\n", what, cudaGetErrorString(e));
@@ -130,6 +166,32 @@ void build_reachability_cuda(int32_t num_states, int32_t num_symbols,
     check(cudaStreamSynchronize(s), "sync");
   }
   check(cudaFreeAsync(changed, s), "free flag");
+}
+
+void advance_state_batch_cuda(const FsaTable& fsa, const TokenSymbols& toks,
+                              const int32_t* states, const int32_t* token_ids,
+                              int32_t batch, int32_t* next_states, void* stream) {
+  if (batch <= 0) return;
+  auto s = static_cast<cudaStream_t>(stream);
+  const int32_t block = 128;
+  const int32_t grid = (batch + block - 1) / block;
+  advance_state_kernel<<<grid, block, 0, s>>>(
+      fsa.trans.data(), fsa.num_symbols, fsa.num_states, fsa.accept.data(),
+      fsa.live.data(), fsa.dead, toks.offsets.data(), toks.symbols.data(),
+      toks.eos_id, states, token_ids, batch, next_states);
+  check(cudaStreamSynchronize(s), "sync");
+}
+
+void apply_mask_batch_cuda(const FsaTable& fsa, const TokenSymbols& toks,
+                           const int32_t* states, int32_t batch, float* logits,
+                           float neg_inf, void* stream) {
+  if (batch <= 0) return;
+  auto s = static_cast<cudaStream_t>(stream);
+  apply_mask_kernel<<<batch, kWarp, 0, s>>>(
+      fsa.trans.data(), fsa.num_symbols, fsa.num_states, fsa.accept.data(),
+      fsa.live.data(), fsa.dead, toks.offsets.data(), toks.symbols.data(),
+      toks.vocab_size, toks.eos_id, states, logits, neg_inf);
+  check(cudaStreamSynchronize(s), "sync");
 }
 
 void compute_mask_batch_cuda(const FsaTable& fsa, const TokenSymbols& toks,

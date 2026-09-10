@@ -89,4 +89,25 @@ void compute_mask_batch(const FsaTable& fsa, const TokenSymbols& toks,
   }
 }
 
+void advance_state_batch(const FsaTable& fsa, const TokenSymbols& toks,
+                         const int32_t* states, const int32_t* token_ids,
+                         int32_t batch, int32_t* next_states) {
+  for (int32_t b = 0; b < batch; ++b) {
+    next_states[b] = step(fsa, toks, states[b], token_ids[b]);
+  }
+}
+
+void apply_mask_batch(const FsaTable& fsa, const TokenSymbols& toks,
+                      const int32_t* states, int32_t batch, float* logits,
+                      float neg_inf) {
+  const int64_t vocab = toks.vocab_size;
+  for (int32_t b = 0; b < batch; ++b) {
+    float* row = logits + b * vocab;
+    const int32_t state = states[b];
+    for (int32_t t = 0; t < toks.vocab_size; ++t) {
+      if (step(fsa, toks, state, t) == -1) row[t] = neg_inf;
+    }
+  }
+}
+
 }  // namespace bpdecode

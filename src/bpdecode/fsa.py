@@ -178,3 +178,34 @@ def compute_mask(fsa: FsaTable, toks: TokenSymbols, state: int) -> list[bool]:
     if toks.eos_id >= 0 and state >= 0 and fsa.accept[state]:
         out[toks.eos_id] = True
     return out
+
+
+def advance_state_batch(
+    fsa: FsaTable,
+    toks: TokenSymbols,
+    states: list[int],
+    token_ids: list[int],
+) -> list[int]:
+    """One next-state per request -- mirrors ``bpdecode::advance_state_batch``.
+    ``-1`` marks a request whose sampled token was off a valid path.
+    """
+    return [
+        step(fsa, toks, s, t) for s, t in zip(states, token_ids, strict=True)
+    ]
+
+
+def apply_mask(
+    fsa: FsaTable,
+    toks: TokenSymbols,
+    states: list[int],
+    logits: list[list[float]],
+    neg_inf: float = float("-inf"),
+) -> list[list[float]]:
+    """In-place fused mask + logit bias -- mirrors ``bpdecode::apply_mask_batch``.
+    ``logits`` is one row of length ``vocab_size`` per request.
+    """
+    for row, state in zip(logits, states, strict=True):
+        for t in range(toks.vocab_size):
+            if step(fsa, toks, state, t) == -1:
+                row[t] = neg_inf
+    return logits

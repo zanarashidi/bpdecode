@@ -2,6 +2,9 @@
 
 #include <gtest/gtest.h>
 
+#include <limits>
+#include <vector>
+
 using namespace bpdecode;
 
 namespace {
@@ -104,4 +107,40 @@ TEST(MaskBatch, IndependentRows) {
   EXPECT_TRUE(out[0] & (1u << 0));
   EXPECT_FALSE(out[0] & (1u << 4));
   EXPECT_TRUE(out[1] & (1u << 4));
+}
+
+TEST(AdvanceStateBatch, CommitsSampledToken) {
+  auto f = make_ab_fsa();
+  auto t = make_toks();
+  int32_t states[3] = {0, 1, 2};
+  int32_t tokens[3] = {0, 1, 4};  // 'a' from s0; 'b' from s1; EOS from s2
+  int32_t next[3] = {0, 0, 0};
+  advance_state_batch(f, t, states, tokens, 3, next);
+  EXPECT_EQ(next[0], 1);
+  EXPECT_EQ(next[1], 2);
+  EXPECT_EQ(next[2], 2);  // EOS leaves the accepting state put
+
+  int32_t bad_state[1] = {0};
+  int32_t bad_tok[1] = {1};  // 'b' from start -> not on a valid path
+  int32_t bad_next[1] = {0};
+  advance_state_batch(f, t, bad_state, bad_tok, 1, bad_next);
+  EXPECT_EQ(bad_next[0], -1);
+}
+
+TEST(ApplyMaskBatch, MasksDisallowedLogits) {
+  auto f = make_ab_fsa();
+  auto t = make_toks();
+  int32_t states[2] = {0, 2};
+  std::vector<float> logits(2 * t.vocab_size, 1.0f);
+  const float ninf = -std::numeric_limits<float>::infinity();
+  apply_mask_batch(f, t, states, 2, logits.data(), ninf);
+
+  // row 0 (start): "a"(0) and "ab"(2) allowed; "b"(1), "c"(3), EOS(4) masked
+  EXPECT_EQ(logits[0], 1.0f);
+  EXPECT_EQ(logits[2], 1.0f);
+  EXPECT_EQ(logits[1], ninf);
+  EXPECT_EQ(logits[4], ninf);
+  // row 1 (accept): only EOS(4) survives
+  EXPECT_EQ(logits[t.vocab_size + 4], 1.0f);
+  EXPECT_EQ(logits[t.vocab_size + 0], ninf);
 }
