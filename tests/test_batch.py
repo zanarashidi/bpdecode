@@ -9,7 +9,13 @@ import pytest
 torch = pytest.importorskip("torch")
 pytest.importorskip("bpdecode.ops")
 
-from bpdecode.batch import BROKEN, FREE, ConstraintBatch, GrammarCache  # noqa: E402
+from bpdecode.batch import (  # noqa: E402
+    BROKEN,
+    FREE,
+    ConstraintBatch,
+    GrammarCache,
+    MaskCache,
+)
 from bpdecode.reference import RegexConstraint  # noqa: E402
 from bpdecode.tokenizer import Vocabulary  # noqa: E402
 
@@ -43,12 +49,12 @@ def test_lifecycle_slots_are_reused() -> None:
     assert "r0" not in batch and "r2" in batch
 
 
-def _simulate(pattern: str, token_seq: list[int]) -> None:
+def _simulate(pattern: str, token_seq: list[int], mask_cache: bool = False) -> None:
     """Drive one sequence through ConstraintBatch and RegexConstraint in
     lockstep, asserting the allow-sets match at every step.
     """
     cache = GrammarCache(VOCAB)
-    batch = ConstraintBatch(cache.get(pattern), capacity=4)
+    batch = ConstraintBatch(cache.get(pattern), capacity=4, mask_cache=mask_cache)
     ref = RegexConstraint(pattern, VOCAB)
     batch.add("s")
 
@@ -66,6 +72,7 @@ def _simulate(pattern: str, token_seq: list[int]) -> None:
         assert batch.is_complete("s") == ref.is_complete()
 
 
+@pytest.mark.parametrize("mask_cache", [False, True], ids=["kernel", "cached"])
 @pytest.mark.parametrize(
     "pattern,seq",
     [
@@ -75,8 +82,10 @@ def _simulate(pattern: str, token_seq: list[int]) -> None:
         ("a+b*", [0, 0, 1, 9]),
     ],
 )
-def test_matches_single_sequence_reference(pattern: str, seq: list[int]) -> None:
-    _simulate(pattern, seq)
+def test_matches_single_sequence_reference(
+    pattern: str, seq: list[int], mask_cache: bool
+) -> None:
+    _simulate(pattern, seq, mask_cache=mask_cache)
 
 
 def test_batch_rows_are_independent() -> None:
@@ -96,6 +105,44 @@ def test_batch_rows_are_independent() -> None:
         assert logits[row, TOKENS.index("0")].item() == 0.0
         assert logits[row, TOKENS.index("a")].item() == float("-inf")
         assert logits[row, VOCAB.eos_id].item() == 0.0
+
+
+@pytest.mark.parametrize(
+    "pattern", ["[01]+", "-?[0-9]+(\\.[0-9]+)?", "(ab)+", "a|b|12"]
+)
+def test_mask_cache_matches_uncached(pattern: str) -> None:
+    from bpdecode.ops import apply_mask_
+    from bpdecode.regex import compile_regex
+
+    fsa = GrammarCache(VOCAB).get(pattern)
+    dfa = compile_regex(pattern)
+    states = sorted(range(len(dfa.trans)))  # every state incl. dead
+    st = torch.tensor(states * 2, dtype=torch.int32)  # repeats -> exercise grouping
+
+    mc = MaskCache(fsa)
+    base = torch.randn(len(st), VOCAB.size)
+    want = base.clone()
+    apply_mask_(want, fsa, st)
+    got = base.clone()
+    mc.apply(st, got)
+    assert torch.equal(want, got)
+
+    # a second pass is all cache hits and identical
+    got2 = base.clone()
+    mc.apply(st, got2)
+    assert torch.equal(want, got2)
+    assert len(mc) == len(set(states))
+
+
+def test_mask_cache_lru_evicts() -> None:
+    fsa = GrammarCache(VOCAB).get("-?[0-9]+(\\.[0-9]+)?")
+    mc = MaskCache(fsa, max_states=2)
+    mc.allowed_ids(0)
+    mc.allowed_ids(1)
+    mc.allowed_ids(0)  # touch
+    mc.allowed_ids(2)  # evicts state 1
+    assert len(mc) == 2
+    assert 1 not in mc._allowed and 0 in mc._allowed
 
 
 def test_broken_state_is_flagged() -> None:

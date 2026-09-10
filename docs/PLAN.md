@@ -33,6 +33,8 @@ src/bpdecode/     host front-end (Python): regex/PDA compilers, TokenDFA,
   fsa.py                      DFA + Vocabulary -> FsaTable/TokenSymbols export
                               (+ scalar mirrors of the C++ core)
   ops.py                      torch.ops.bpdecode.* wrappers (FsaTensors bundle)
+  batch.py                     GrammarCache / ConstraintBatch / MaskCache
+  hf.py                        transformers RegexLogitsProcessor
 csrc/             C++/CUDA core: FsaTable/TokenSymbols ABI, mask kernels
   include/bpdecode/mask.hpp    the ABI callers compile against
   src/mask_cpu.cpp             scalar reference + build_reachability
@@ -113,8 +115,10 @@ CUDA kernels -- written, run only on GPU CI (`.github/workflows/gpu.yml`,
       pattern string -> one shared `FsaTensors`).
 - [x] HF `LogitsProcessor` adapter: `bpdecode.hf.RegexLogitsProcessor`
       (per-row state, advances on the sampled token; greedy + sampling).
-- [ ] device-side adaptive mask cache (context-independent masks, LRU) --
-      mask depends only on the DFA state, so cache `state -> mask row`.
+- [x] adaptive mask cache: `bpdecode.batch.MaskCache` -- LRU of per-state
+      allow-sets (context-independent), stored as token-id lists so it stays
+      kilobytes at 150k vocab. `ConstraintBatch(mask_cache=True)` -> a hit is a
+      gather+scatter, no kernel launch.
 - [ ] vLLM adapter (its logits-processor plugin API); end-to-end demo.
 - [ ] benchmark vs Outlines (tokens/s, per-token mask overhead).
 

@@ -9,6 +9,10 @@ one kernel launch (via :mod:`bpdecode.ops`).
 :class:`~bpdecode.ops.FsaTensors` to every sequence that uses it -- "shared
 compiled DFA across identical grammars".
 
+:class:`MaskCache` memoises the allow-set per DFA state (context-independent),
+so a batch where many rows share a state, or a sequence revisiting a state,
+skips the mask kernel.  Pass ``mask_cache=True`` to :class:`ConstraintBatch`.
+
 Phase 2 scope: a single grammar per batch (the common case -- every request
 against the same JSON schema). Mixed-grammar batches are grouped by the caller
 for now; native grouping is a follow-up.
@@ -16,7 +20,7 @@ for now; native grouping is a follow-up.
 
 from __future__ import annotations
 
-from collections import OrderedDict
+from collections import OrderedDict, defaultdict
 from collections.abc import Hashable, Sequence
 
 import torch
@@ -26,6 +30,60 @@ from .tokenizer import Vocabulary
 
 FREE = -2  # slot holds no sequence
 BROKEN = -1  # a committed token left the grammar-valid path (matches step() == -1)
+
+
+class MaskCache:
+    """LRU cache of allow-sets keyed by DFA state.
+
+    The mask a state produces is context-independent -- it does not depend on
+    which sequence or step is asking -- so once a state's allow-set is computed
+    it is reused for every sequence sitting in that state, across the batch and
+    over time.  A hit costs a gather + scatter instead of a kernel launch.
+
+    Allowed-token id lists are stored (typically a handful of ids), not full
+    rows, so the cache stays kilobytes even for a 150k vocab.
+    """
+
+    def __init__(self, fsa: FsaTensors, max_states: int = 512) -> None:
+        self._fsa = fsa
+        self._vocab = int(fsa.offsets.numel() - 1)
+        self._max = max_states
+        self._allowed: OrderedDict[int, torch.Tensor] = OrderedDict()
+
+    def _compute(self, state: int) -> torch.Tensor:
+        probe = torch.zeros(1, self._vocab, device=self._fsa.device)
+        st = torch.tensor([state], dtype=torch.int32, device=self._fsa.device)
+        apply_mask_(probe, self._fsa, st)
+        return (probe[0] == 0.0).nonzero(as_tuple=False).squeeze(1).to(torch.long)
+
+    def allowed_ids(self, state: int) -> torch.Tensor:
+        hit = self._allowed.get(state)
+        if hit is not None:
+            self._allowed.move_to_end(state)
+            return hit
+        ids = self._compute(state)
+        self._allowed[state] = ids
+        if len(self._allowed) > self._max:
+            self._allowed.popitem(last=False)
+        return ids
+
+    def __len__(self) -> int:
+        return len(self._allowed)
+
+    def apply(
+        self, states: torch.Tensor, logits: torch.Tensor, neg_inf: float = float("-inf")
+    ) -> torch.Tensor:
+        """In place: mask ``logits`` [n, vocab] given one state per row."""
+        by_state: dict[int, list[int]] = defaultdict(list)
+        for i, s in enumerate(states.tolist()):
+            by_state[s].append(i)
+        for state, rows in by_state.items():
+            allowed = self.allowed_ids(state).to(logits.device)
+            r = torch.tensor(rows, device=logits.device)
+            keep = logits.index_select(0, r).index_select(1, allowed)
+            logits[r] = neg_inf
+            logits[r.unsqueeze(1), allowed] = keep
+        return logits
 
 
 class GrammarCache:
@@ -70,6 +128,7 @@ class ConstraintBatch:
         fsa: FsaTensors,
         capacity: int,
         device: torch.device | str | None = None,
+        mask_cache: bool | MaskCache = False,
     ) -> None:
         self.fsa = fsa if device is None else fsa.to(device)
         self.device = self.fsa.device
@@ -79,6 +138,9 @@ class ConstraintBatch:
         )
         self._slot_of: dict[Hashable, int] = {}
         self._free: list[int] = list(reversed(range(capacity)))
+        if mask_cache is True:
+            mask_cache = MaskCache(self.fsa)
+        self.cache: MaskCache | None = mask_cache or None
 
     # --- lifecycle -------------------------------------------------------
     def add(self, seq_id: Hashable) -> int:
@@ -121,7 +183,10 @@ class ConstraintBatch:
         ``[len(seq_ids), vocab]`` to ``neg_inf``, one row per ``seq_ids`` entry.
         """
         states = self._state[self._slots(seq_ids)]
-        apply_mask_(logits, self.fsa, states, neg_inf)
+        if self.cache is not None:
+            self.cache.apply(states, logits, neg_inf)
+        else:
+            apply_mask_(logits, self.fsa, states, neg_inf)
         return logits
 
     def commit(
