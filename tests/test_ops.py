@@ -41,7 +41,7 @@ def test_apply_mask_matches_scalar(pattern: str) -> None:
     dfa = compile_regex(pattern)
     fsa = fsa_from_dfa(dfa)
     toks = token_symbols(dfa, VOCAB)
-    bundle = FsaTensors.build(pattern, VOCAB)
+    bundle = FsaTensors.build(pattern, VOCAB, dense=False)
 
     states = _states(dfa)
     logits = torch.zeros(len(states), VOCAB.size)
@@ -55,7 +55,7 @@ def test_apply_mask_matches_scalar(pattern: str) -> None:
 def test_advance_state_matches_tokendfa(pattern: str) -> None:
     dfa = compile_regex(pattern)
     tdfa = TokenDFA(dfa, VOCAB)
-    bundle = FsaTensors.build(pattern, VOCAB)
+    bundle = FsaTensors.build(pattern, VOCAB, dense=False)
 
     states, tokens, expected = [], [], []
     for s in _states(dfa):
@@ -75,7 +75,7 @@ def test_advance_state_matches_tokendfa(pattern: str) -> None:
 
 def test_build_reachability_op_matches_export() -> None:
     dfa = compile_regex("-?[0-9]+(\\.[0-9]+)?")
-    bundle = FsaTensors.build(dfa, VOCAB)
+    bundle = FsaTensors.build(dfa, VOCAB, dense=False)
     live = torch.ops.bpdecode.build_reachability(
         bundle.trans, bundle.accept, bundle.num_symbols
     )
@@ -86,7 +86,7 @@ def test_apply_mask_agrees_with_regexconstraint() -> None:
     pattern = "[01]+"
     con = RegexConstraint(pattern, VOCAB)
     con.advance(VOCAB.token_bytes.index(b"0"))
-    bundle = FsaTensors.build(pattern, VOCAB)
+    bundle = FsaTensors.build(pattern, VOCAB, dense=False)
 
     logits = torch.zeros(1, VOCAB.size)
     ops.apply_mask_(logits, bundle, torch.tensor([con.state], dtype=torch.int32))
@@ -98,7 +98,7 @@ def test_compute_mask_op_bits_match_scalar(pattern: str) -> None:
     dfa = compile_regex(pattern)
     fsa = fsa_from_dfa(dfa)
     toks = token_symbols(dfa, VOCAB)
-    bundle = FsaTensors.build(pattern, VOCAB)
+    bundle = FsaTensors.build(pattern, VOCAB, dense=False)
     states = _states(dfa)
 
     packed = ops.compute_mask(bundle, torch.tensor(states, dtype=torch.int32))

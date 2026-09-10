@@ -120,6 +120,12 @@ CUDA kernels -- written, run only on GPU CI (`.github/workflows/gpu.yml`,
       allow-sets (context-independent), stored as token-id lists so it stays
       kilobytes at 150k vocab. `ConstraintBatch(mask_cache=True)` -> a hit is a
       gather+scatter, no kernel launch.
+- [x] dense token-transition table: `FsaTensors(dense=True)` precomputes
+      `tok_next[state][token]` (`ops.build_token_transitions`, walk the vocab
+      shortest-first). `apply_mask_` / `advance_state` then take a `tok_next`
+      gather instead of re-walking token bytes -- 3-15x faster per step, beats
+      `outlines_core` on non-trivial regexes (`bench/RESULTS.md`). `dense="auto"`
+      (default) enables it when `num_states x vocab` <= ~32M.
 - [x] vLLM adapter: `bpdecode.vllm` -- `RegexLogitsProcessor` (request-level,
       `SamplingParams(logits_processors=[...])`) + `RegexLogitsProcessorFactory`
       (grammar sharing); `BatchConstraintState` is the state machine for a V1
@@ -155,8 +161,6 @@ CUDA kernels -- written, run only on GPU CI (`.github/workflows/gpu.yml`,
 
 - stream overlap with forward pass, persistent kernel, Nsight tuning
 - multi-GPU (shard by request -- state is tiny)
-- dense precomputed `tok_next[state][token]` table so a mask step is an
-  O(vocab) gather, not a re-walk of every token's bytes (`bench/RESULTS.md`)
 - docs, examples, `cibuildwheel` wheels, benchmark report
 
 ## Key risks

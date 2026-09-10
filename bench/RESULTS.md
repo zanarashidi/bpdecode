@@ -3,16 +3,14 @@
 `Qwen/Qwen2.5-0.5B` tokenizer (V = 151 643), **CPU** (Apple M-series),
 `outlines_core` 0.2.14, median of 5 runs, batch 8.
 
-| case | build bp | build ol | step bp (kernel) | step bp (cache) | step ol | disagree |
-|---|---:|---:|---:|---:|---:|---:|
-| email    | 17 ms | 10 ms |  584 µs | 593 µs | 207 µs | 0 / 3 |
-| ipv4     | 17 ms | 11 ms |  276 µs | 303 µs |  2.3 µs | 0 / 12 |
-| sentence | 17 ms | 12 ms | 1222 µs | 1228 µs | 412 µs | 0 / 6 |
-| json     | 17 ms | 22 ms |  432 µs | 412 µs |  34 µs | 0 / 13 |
+| case | build bp | build bp +dense | build ol | step bp (byte-walk) | step bp (dense) | step ol | disagree |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| email    | 16 ms | 39 ms | 10 ms |  589 µs | **112 µs** | 206 µs | 0 / 3 |
+| ipv4     | 16 ms | 59 ms | 11 ms |  283 µs |   92 µs |   2.3 µs | 0 / 12 |
+| sentence | 16 ms | 39 ms | 11 ms | 1223 µs | **137 µs** | 401 µs | 0 / 6 |
+| json     | 17 ms | 74 ms | 17 ms |  414 µs |   94 µs |  32 µs | 0 / 13 |
 
-`step` is per token **per sequence** (µs). Earlier runs had `build bp` at
-~200 ms; `token_symbols` now maps token bytes through a 256-entry
-`bytes.translate` table instead of a Python loop over 151 k tokens.
+`step` is per token **per sequence** (µs).
 
 ## Reading
 
@@ -20,31 +18,29 @@
 every case -- bpdecode's byte-DFA path and Outlines' token FSM agree token for
 token.
 
-**Compile: at parity.** Both ~10-22 ms; bpdecode wins on `json`, loses on the
-simpler patterns. The regex -> DFA subset construction is 0.4 ms; the rest is
-turning the tables into tensors. `GrammarCache`d anyway, so it is a
+**Compile: bpdecode ~16 ms, dense adds 20-60 ms.** Both within a few x of
+`outlines_core`. The dense table (`build_token_transitions`) runs the whole
+vocab through the byte-DFA; walking tokens shortest-first keeps the cost near
+`sum(lengths)` rather than `V x max_len`. `GrammarCache`d, so it is a
 time-to-first-token cost only.
 
-**Per-token mask: Outlines 2-15x faster on CPU.** Root cause is architectural:
-Outlines' `Index` precomputes the *entire* token-level transition table up
-front, so a decode step is a memcpy of a cached bitmask row. bpdecode recomputes
-`step()` across the whole vocab every step (walking each token's bytes through
-the byte-DFA). `MaskCache` barely helps here because a single sequence's walk
-visits mostly-distinct states.
+**Per-token mask:**
 
-Two things to note:
+- **byte-walk path** (`step()` over the whole vocab each step): 3-15x slower
+  than Outlines. Outlines' `Index` precomputes the token-level transition
+  table, so its step is a memcpy of a cached bitmask row.
+- **dense path** (`FsaTensors(dense=True)` -- our version of that same
+  precomputed table, `tok_next[state][token]`): a step is `tok_next[states]
+  != -1` then `masked_fill_`. **Faster than Outlines on the non-trivial
+  patterns** (email, sentence), slower on the trivial ones where Outlines is
+  just copying a ~5 KB row. `dense="auto"` (the default) turns it on when
+  `num_states x vocab` fits in ~32 M entries.
 
-1. This microbench runs on **CPU**, where bpdecode's "kernel" is a scalar loop
-   with no parallelism -- the worst case for a design built around one GPU
-   launch masking a whole batch. Rerun with `--device cuda --batch 64` on the
-   GPU box for the comparison that matters.
-2. The precomputed token-transition table is the "byte-DFA x tokenizer product"
-   from the plan; Phase 1 shipped the *lazy* version. A dense
-   `tok_next[state][token]` (≈ states x 151 k x 4 B, a few MB for a regex) would
-   make a step an O(vocab) gather instead of O(vocab x bytes/token x log
-   symbols). Candidate for Phase 2 follow-up or Phase 5.
+This is still **CPU**, where a step is `[batch, 151 k]` tensor ops with no real
+parallelism. Rerun `--device cuda --batch 64` on the GPU box for the comparison
+that matters.
 
-**The bet.** Hard-masking is a solved problem and mature FSM libs are fast at
-it. bpdecode's differentiator is the Phase 4 soft-lookahead layer (a weighted
-backward pass Outlines/XGrammar don't have) and GPU batch amortization -- not
-out-teching `outlines_core` at bitmask memcpy on CPU.
+**The bet.** Hard-masking is a solved problem. bpdecode's dense path is now
+competitive; the actual differentiator is the Phase 4 soft-lookahead layer
+(a weighted backward pass Outlines/XGrammar don't have) and GPU batch
+amortization.

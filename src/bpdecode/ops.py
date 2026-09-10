@@ -43,10 +43,22 @@ class FsaTensors:
     eos_id: int
     start: int = 0
     accepting: frozenset[int] = frozenset()
+    # optional dense [num_states, vocab] int32: state after emitting token t from
+    # state s, or -1 if t is rejected. When set, apply_mask_ / advance_state take
+    # a gather fast path instead of re-walking token bytes.
+    tok_next: torch.Tensor | None = None
 
     @property
     def device(self) -> torch.device:
         return self.trans.device
+
+    @property
+    def num_states(self) -> int:
+        return int(self.accept.numel())
+
+    @property
+    def vocab_size(self) -> int:
+        return int(self.offsets.numel() - 1)
 
     def to(self, device: torch.device | str) -> FsaTensors:
         if self.trans.device == torch.device(device):
@@ -62,7 +74,16 @@ class FsaTensors:
             self.eos_id,
             self.start,
             self.accepting,
+            None if self.tok_next is None else self.tok_next.to(device),
         )
+
+    def densify(self) -> FsaTensors:
+        """Return a copy carrying the precomputed ``tok_next`` table."""
+        if self.tok_next is not None:
+            return self
+        from dataclasses import replace
+
+        return replace(self, tok_next=build_token_transitions(self))
 
     @classmethod
     def from_tables(cls, fsa: FsaTable, toks: TokenSymbols) -> FsaTensors:
@@ -82,9 +103,70 @@ class FsaTensors:
         )
 
     @classmethod
-    def build(cls, pattern: str | DFA, vocab: Vocabulary) -> FsaTensors:
+    def build(
+        cls,
+        pattern: str | DFA,
+        vocab: Vocabulary,
+        *,
+        dense: bool | str = "auto",
+    ) -> FsaTensors:
         dfa = pattern if isinstance(pattern, DFA) else compile_regex(pattern)
-        return cls.from_tables(fsa_from_dfa(dfa), token_symbols(dfa, vocab))
+        fsa = cls.from_tables(fsa_from_dfa(dfa), token_symbols(dfa, vocab))
+        want = dense is True or (
+            dense == "auto" and fsa.num_states * fsa.vocab_size <= 32_000_000
+        )
+        return fsa.densify() if want else fsa
+
+
+def build_token_transitions(fsa: FsaTensors) -> torch.Tensor:
+    """Dense ``[num_states, vocab]`` int32: state after emitting token ``t`` from
+    state ``s`` (``-1`` if ``t`` is rejected -- undefined transition or a state
+    no accepting state is reachable from). Matches ``step`` token for token.
+
+    Built by running the whole vocab through the byte-DFA in parallel, one
+    byte-position at a time.
+    """
+    dev = fsa.device
+    S, M, V = fsa.num_states, fsa.num_symbols, fsa.vocab_size
+    trans = fsa.trans.to(torch.long)
+    offsets = fsa.offsets.to(torch.long)
+    lengths = offsets[1:] - offsets[:-1]  # [V]
+
+    cur = (
+        torch.arange(S, device=dev).view(S, 1).expand(S, V).contiguous().to(torch.long)
+    )
+    if V and int(lengths.max()):
+        sym = fsa.symbols.to(torch.long)  # [nnz]
+        # walk tokens shortest-first so iteration k only touches the tokens
+        # still mid-walk (a contiguous tail) -- total work is sum(lengths), not V*maxlen
+        order = torch.argsort(lengths)
+        slen = lengths[order]
+        soff = offsets[:-1][order]
+        cur = cur[:, order]
+        for k in range(int(slen[-1])):
+            first = int(torch.searchsorted(slen, k + 1))
+            if first >= V:
+                break
+            seg = slice(first, V)
+            sym_k = sym[soff[seg] + k].view(1, -1)
+            cur[:, seg] = trans[cur[:, seg] * M + sym_k]
+        inv = torch.empty_like(order)
+        inv[order] = torch.arange(V, device=dev)
+        cur = cur[:, inv].contiguous()
+
+    live = fsa.live.to(torch.bool)
+    out = torch.where(
+        live[cur], cur.to(torch.int32), torch.full_like(cur, -1, dtype=torch.int32)
+    )
+    if fsa.eos_id is not None and 0 <= fsa.eos_id < V:
+        acc = fsa.accept.to(torch.bool)  # [S]
+        col = torch.where(
+            acc,
+            torch.arange(S, device=dev, dtype=torch.int32),
+            torch.full((S,), -1, dtype=torch.int32, device=dev),
+        )
+        out[:, fsa.eos_id] = col
+    return out
 
 
 def apply_mask_(
@@ -96,6 +178,9 @@ def apply_mask_(
     """In place: set every disallowed logit in ``logits`` [batch, vocab] to
     ``neg_inf``, one grammar state per row.
     """
+    if fsa.tok_next is not None:
+        rejected = fsa.tok_next.index_select(0, states.long()) == -1  # [B, V]
+        return logits.masked_fill_(rejected, neg_inf)
     return torch.ops.bpdecode.apply_mask_(
         logits, fsa.trans, fsa.accept, fsa.live, fsa.num_symbols, fsa.dead,
         fsa.offsets, fsa.symbols, fsa.eos_id, states, neg_inf,
@@ -118,6 +203,12 @@ def advance_state(
     """Next grammar state per request after emitting ``token_ids``; ``-1`` if a
     sampled token was off a valid path.
     """
+    if fsa.tok_next is not None:
+        s = states.long()
+        t = token_ids.long()
+        broken = s < 0
+        nxt = fsa.tok_next[s.clamp_(min=0), t]
+        return torch.where(broken, torch.full_like(nxt, -1), nxt).to(torch.int32)
     return torch.ops.bpdecode.advance_state(
         fsa.trans, fsa.accept, fsa.live, fsa.num_symbols, fsa.dead,
         fsa.offsets, fsa.symbols, fsa.eos_id, states, token_ids,

@@ -53,9 +53,10 @@ def _timed(fn, repeat: int) -> float:
 class Row:
     case: str
     build_bp: float
+    build_bp_dense: float
     build_ol: float
     step_bp_kernel: float
-    step_bp_cached: float
+    step_bp_dense: float
     step_ol: float
     disagree: int
     steps: int
@@ -76,10 +77,16 @@ def run(model: str, device: str, batch: int, repeat: int) -> list[Row]:
     words_ol = (len(ol_vocab) + 1 + 31) // 32  # outlines sizes for len+1 (EOS)
 
     def bench_case(name: str, pattern: str, sample: str) -> Row:
-        build_bp = _timed(lambda: FsaTensors.build(pattern, bp_vocab), repeat)
+        build_bp = _timed(
+            lambda: FsaTensors.build(pattern, bp_vocab, dense=False), repeat
+        )
+        build_bp_dense = _timed(
+            lambda: FsaTensors.build(pattern, bp_vocab, dense=True), repeat
+        )
         build_ol = _timed(lambda: oc.Index(pattern, ol_vocab), repeat)
 
-        fsa = FsaTensors.build(pattern, bp_vocab).to(device)
+        fsa = FsaTensors.build(pattern, bp_vocab, dense=False).to(device)
+        fsa_dense = fsa.densify()
         token_ids = hf_tok(sample, add_special_tokens=False).input_ids
         steps = len(token_ids)
 
@@ -99,8 +106,8 @@ def run(model: str, device: str, batch: int, repeat: int) -> list[Row]:
             cb1.commit([0], torch.tensor([tid], dtype=torch.int32, device=device))
             guide.advance(tid)
 
-        def bp_step(cache: bool):
-            cb = ConstraintBatch(fsa, capacity=batch, device=device, mask_cache=cache)
+        def bp_step(which):
+            cb = ConstraintBatch(which, capacity=batch, device=device)
             ids = list(range(batch))
             for i in ids:
                 cb.add(i)
@@ -139,9 +146,10 @@ def run(model: str, device: str, batch: int, repeat: int) -> list[Row]:
         return Row(
             name,
             build_bp,
+            build_bp_dense,
             build_ol,
-            _timed(bp_step(False), repeat) / denom,
-            _timed(bp_step(True), repeat) / denom,
+            _timed(bp_step(fsa), repeat) / denom,
+            _timed(bp_step(fsa_dense), repeat) / denom,
             _timed(ol_step(), repeat) / denom,
             disagree,
             steps,
@@ -162,19 +170,20 @@ def main() -> None:
 
     print(f"\nmodel={args.model}  device={args.device}  batch={args.batch}\n")
     print(
-        f"{'case':<10} {'build bp':>10} {'build ol':>10}   "
-        f"{'step bp/k':>10} {'step bp/c':>10} {'step ol':>10}   {'disagree':>9}"
+        f"{'case':<10} {'build bp':>9} {'  +dense':>9} {'build ol':>9}   "
+        f"{'step bp/k':>10} {'step bp/d':>10} {'step ol':>10}   {'disagree':>9}"
     )
-    print("-" * 88)
+    print("-" * 92)
     for r in rows:
         print(
-            f"{r.case:<10} {r.build_bp * 1e3:>9.1f}m {r.build_ol * 1e3:>9.1f}m   "
-            f"{r.step_bp_kernel * 1e6:>9.1f}u {r.step_bp_cached * 1e6:>9.1f}u "
+            f"{r.case:<10} {r.build_bp * 1e3:>8.1f}m {r.build_bp_dense * 1e3:>8.1f}m "
+            f"{r.build_ol * 1e3:>8.1f}m   "
+            f"{r.step_bp_kernel * 1e6:>9.1f}u {r.step_bp_dense * 1e6:>9.1f}u "
             f"{r.step_ol * 1e6:>9.1f}u   {r.disagree:>4}/{r.steps:<4}"
         )
     print(
         "\nbuild = regex -> ready (ms).  step = per token per sequence "
-        "(us).  bp/k = kernel, bp/c = mask cache.\n"
+        "(us).  bp/k = byte-walk kernel, bp/d = dense tok_next gather.\n"
         "disagree = decode steps where the non-EOS allowed sets differ."
     )
 

@@ -52,7 +52,7 @@ def test_apply_mask_cuda_matches_cpu(pattern: str) -> None:
     states = _states(dfa)
     st = torch.tensor(states, dtype=torch.int32)
 
-    cpu = FsaTensors.build(pattern, VOCAB)
+    cpu = FsaTensors.build(pattern, VOCAB, dense=False)
     gpu = cpu.to("cuda")
 
     base = torch.randn(len(states), VOCAB.size)
@@ -63,6 +63,11 @@ def test_apply_mask_cuda_matches_cpu(pattern: str) -> None:
 
     assert torch.equal(got_cpu, got_gpu.cpu())
 
+    # dense path (pure torch) on CUDA must agree with the kernel
+    dense_gpu = base.cuda()
+    ops.apply_mask_(dense_gpu, gpu.densify(), st.cuda())
+    assert torch.equal(got_cpu, dense_gpu.cpu())
+
 
 @pytest.mark.parametrize("pattern", PATTERNS)
 def test_compute_mask_cuda_matches_cpu(pattern: str) -> None:
@@ -70,7 +75,7 @@ def test_compute_mask_cuda_matches_cpu(pattern: str) -> None:
 
     dfa = compile_regex(pattern)
     st = torch.tensor(_states(dfa), dtype=torch.int32)
-    cpu = FsaTensors.build(pattern, VOCAB)
+    cpu = FsaTensors.build(pattern, VOCAB, dense=False)
     gpu = cpu.to("cuda")
     assert torch.equal(
         ops.compute_mask(cpu, st), ops.compute_mask(gpu, st.cuda()).cpu()
@@ -90,7 +95,7 @@ def test_advance_state_cuda_matches_cpu(pattern: str) -> None:
     st = torch.tensor(states, dtype=torch.int32)
     tk = torch.tensor(tokens, dtype=torch.int32)
 
-    cpu = FsaTensors.build(pattern, VOCAB)
+    cpu = FsaTensors.build(pattern, VOCAB, dense=False)
     gpu = cpu.to("cuda")
 
     got_cpu = ops.advance_state(cpu, st, tk)
@@ -101,7 +106,7 @@ def test_advance_state_cuda_matches_cpu(pattern: str) -> None:
 def test_build_reachability_cuda_matches_cpu() -> None:
     from bpdecode.fsa import build_reachability
 
-    bundle = FsaTensors.build("-?[0-9]+(\\.[0-9]+)?", VOCAB)
+    bundle = FsaTensors.build("-?[0-9]+(\\.[0-9]+)?", VOCAB, dense=False)
     ref = build_reachability(
         len(bundle.accept),
         bundle.num_symbols,
