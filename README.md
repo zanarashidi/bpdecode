@@ -10,10 +10,11 @@ The message-passing core grew out of a CUDA loopy belief-propagation project
 automaton is boolean message passing to a fixpoint, and "soft" lookahead
 guidance is the sum-product version of the same pass.
 
-## Status: Phase 1 (FSA path) -- in progress
+## Status: Phase 1 (FSA path) -- done
 
-Phase 0 (host scaffolding) is complete; Phase 1 is lowering that pipeline onto
-the GPU.
+Phases 0-1 complete: the regex -> byte-DFA front-end, host FSA export, and the
+batched CUDA mask/advance/apply kernels (validated on an RTX 3090 against the
+CPU reference). Phase 2 (continuous batching + serving integration) is next.
 
 | Piece | Module | Notes |
 |---|---|---|
@@ -24,10 +25,7 @@ the GPU.
 | CPU reference | `bpdecode.reference` | `RegexConstraint` -- the correctness oracle for every later backend |
 | FSA export | `bpdecode.fsa` | flatten DFA + vocab into `FsaTable` / `TokenSymbols` (the C++ ABI, ready for CSR upload) + scalar `step` / `compute_mask` / `advance_state` / `apply_mask` mirrors |
 | C++/CUDA core | `csrc/` | `build_reachability` (boolean-BP fixpoint), scalar `compute_mask` / `advance_state` / fused `apply_mask`; matching batched CUDA kernels (warp-per-request, `__ballot_sync`) |
-| torch ops | `bpdecode.ops` | `torch.ops.bpdecode.*` via `scikit-build-core`; CPU path tested, CUDA path dispatched by tensor device |
-
-Still to land in Phase 1: run the CUDA-vs-CPU differential on a real GPU
-(`scripts/gpu_check.sh` / the `gpu` workflow) to close it out.
+| torch ops | `bpdecode.ops` | `torch.ops.bpdecode.*` via `scikit-build-core`; CPU + CUDA, dispatched by tensor device |
 
 See [`docs/PLAN.md`](docs/PLAN.md) for the full roadmap (batching, pushdown/CFG,
 sum-product lookahead, perf hardening).

@@ -68,7 +68,11 @@ tests/            differential tests vs the CPU reference; fuzzing
 - [x] CPU reference `RegexConstraint` + brute-force differential tests
 - [x] C++ ABI (`FsaTable`, `TokenSymbols`) + scalar `compute_mask*` + gtests
 
-### Phase 1 -- FSA path, single request, GPU mask *(code complete; CUDA run pending)*
+### Phase 1 -- FSA path, single request, GPU mask *(done)*
+
+CUDA kernels validated on an RTX 3090 (2026-09-10): `tests/test_cuda.py`
+differential (22 cases) + `compute-sanitizer` memcheck, both clean. Rerun with
+`scripts/gpu_check.sh`.
 
 Host side -- runs without a GPU, covered by `pytest` + gtests:
 
@@ -97,8 +101,7 @@ CUDA kernels -- written, run only on GPU CI (`.github/workflows/gpu.yml`,
 - [x] `advance_state_batch_cuda` (thread/request); `apply_mask_batch_cuda`
       (warp/request, fused, no bitset round-trip).
 - [x] `build_reachability_cuda`: iterative `live |= OR(succ)` fixpoint.
-- [ ] **run `scripts/gpu_check.sh` once on a real GPU** to close Phase 1
-      (differential + `compute-sanitizer`).
+- [x] validated on an RTX 3090 -- differential + `compute-sanitizer` clean.
 - [ ] nvbench microbench (deferred to Phase 5 perf work).
 
 ### Phase 2 -- batching + serving integration
