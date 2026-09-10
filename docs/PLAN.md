@@ -185,7 +185,7 @@ CUDA kernels -- written, run only on GPU CI (`.github/workflows/gpu.yml`,
       ~14x under xgrammar, ~70x under llguidance**; the cost is a ~0.2 s
       first-request warmup + ~0.5 s one-time token-trie build per vocab.
 
-### Phase 4 -- soft lookahead (novel) *(in progress)*
+### Phase 4 -- soft lookahead (novel) *(done -- negative result)*
 
 - [x] k-step backward sum-product over the token-DFA (`ops.build_lookahead`):
       `logZ_0(s) = 0` if live else `-inf`; `logZ_{j+1}(s) = logsumexp_t
@@ -198,10 +198,17 @@ CUDA kernels -- written, run only on GPU CI (`.github/workflows/gpu.yml`,
       wired into `ConstraintBatch.apply_soft` and `RegexLogitsProcessor(...,
       soft_k=, alpha=)`. Token-level, so it also prunes tokens with no valid
       *token* continuation (the partial-token dead end from Phase 3).
-- [ ] port `build_lookahead` / `apply_soft` to CUDA (bf16, CUDA-graph the
-      fixed-k loop). Structurally identical to `build_token_transitions`.
-- [ ] eval vs hard masking on structured-output tasks -- `bench/soft_eval.py`;
-      report honestly incl. negative results.
+- [x] eval vs hard masking (`bench/soft_eval.py`, `bench/RESULTS.md`).
+      **The hypothesis does not hold**: biasing toward mass-rich continuations
+      (alpha > 0) over-extends -- pads bounded fields with repetitive filler,
+      never terminates unbounded ones. alpha < 0 is a usable terseness knob but
+      not an accuracy win. Uniform continuation-counting ignores the model's
+      own distribution; a real lookahead needs model-probability weighting
+      (extra forward passes). The machinery + API ship with the negative
+      result recorded; the token-level dead-end pruning is kept.
+- [ ] (if revisited) model-weighted lookahead; port `build_lookahead` /
+      `apply_soft` to CUDA (bf16, CUDA-graph the fixed-k loop -- structurally
+      identical to `build_token_transitions`).
 
 Also this phase: regex parser gained `{m,n}` counted repetition;
 `Vocabulary.from_hf` now sizes to `len(tok)` (covers the EOS / added tokens).

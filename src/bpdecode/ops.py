@@ -240,9 +240,11 @@ def apply_soft_(
     s = states.long()
     bias = fsa.lookahead.index_select(0, s.clamp(min=0)).clone()
     bias[s < 0] = float("-inf")  # BROKEN / FREE
-    if alpha == 0.0:
-        return logits.masked_fill_(torch.isneginf(bias), float("-inf"))
-    return logits.add_(bias, alpha=alpha)
+    disallowed = torch.isneginf(bias)
+    if alpha != 0.0:
+        # add only the finite part -- alpha * -inf would flip sign for alpha < 0
+        logits.add_(bias.masked_fill(disallowed, 0.0), alpha=alpha)
+    return logits.masked_fill_(disallowed, float("-inf"))
 
 
 def apply_mask_(

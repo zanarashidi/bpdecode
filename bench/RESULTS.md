@@ -78,3 +78,54 @@ cold path is already fast; it has no warm speedup to give. For a serving
 workload where one schema handles thousands of requests, bpdecode's warm number
 is what matters. The warmup is the price; hiding it (precompute at compile,
 move the trie build to the C++ core) is Phase 5.
+
+---
+
+# soft_eval.py -- soft lookahead vs hard masking (Phase 4)
+
+Qwen2.5-0.5B, greedy, 10 "describe X as JSON" prompts, constrained to a regex
+for `{"name": "...", "year": N}`. `k = 3` backward steps.
+
+| pattern | config | complete | mean name len | repeated-word rate |
+|---|---|---:|---:|---:|
+| name `{1,30}` | hard | 1.00 | 11.6 | 0.10 |
+| name `{1,30}` | soft α=+0.5 | 1.00 | 28.7 | 0.30 |
+| name `{1,30}` | soft α=+1.0 | 1.00 | 28.9 | 0.40 |
+| name `{1,30}` | soft α=-0.3 | 1.00 | 6.4 | 0.00 |
+| name `{1,30}` | soft α=-1.0 | 1.00 | 4.4 | 0.00 |
+| name `[A-Za-z .]+` (unbounded) | hard | 1.00 | 10.0 | 0.10 |
+| name `[A-Za-z .]+` | soft α=+0.5 | **0.00** | -- | -- |
+| name `[A-Za-z .]+` | soft α=-0.3 | 1.00 | 6.4 | 0.00 |
+
+Sample names (unbounded): hard -> `Louis Armstrong`, `Mont Blanc`, `Bubo bubo`;
+α=+1.0 -> `Mont Blanc  romeo  romeo  romeo`; α=-1.0 -> `Louis`, `Mount`, `B.`
+
+## Reading -- the hypothesis does not hold
+
+`build_lookahead` counts grammar-valid token continuations. The plan's idea was
+to bias **toward** states with more continuations (α > 0), steering away from
+valid-but-dead-end tokens.
+
+- **α > 0 makes it worse.** "More continuations" is maximised by *not
+  finishing*: a field that can accept 20 more characters outscores one that can
+  stop now. So positive α pads bounded fields to their limit with repetitive
+  filler (`romeo romeo romeo`) and **never terminates unbounded ones**
+  (0% completion).
+- **α < 0 (bias toward completion)** keeps every output valid and makes them
+  more concise, but truncates real content (`Louis` for `Louis Armstrong`).
+  It is a usable "terseness" knob, not an accuracy win -- hard masking plus a
+  competent model already produces the full name.
+- The token-level formulation *does* correctly prune tokens with no valid
+  *token* continuation (the Phase 3 partial-token dead end) -- that part works
+  and is kept.
+
+**Why:** uniform continuation-counting ignores the model's own distribution.
+The continuations soft lookahead rewards are mostly ones the model would never
+generate. A useful lookahead has to weight continuations by model probability
+(proper model-predictive control / lookahead decoding), which needs extra
+forward passes -- a heavier technique, out of scope here.
+
+**Verdict:** the count-based soft-lookahead bias is not a win over hard masking
+for structured output. The machinery ships (it is the same backward
+sum-product as `build_reachability`, and the API / knob are there for
+model-weighted experiments), with this negative result recorded.

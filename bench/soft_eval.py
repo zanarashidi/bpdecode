@@ -11,7 +11,13 @@ at a few `alpha`. We report:
 
 Hypothesis: hard masking lets the model take the locally-easy exits (an empty
 string, an early close) that a soft bias toward mass-rich continuations avoids.
-Run it and see; a null result is a result.
+
+Result (see bench/RESULTS.md): the hypothesis does **not** hold. Positive alpha
+(toward mass-rich futures) over-extends -- it pads bounded fields to their max
+with repetitive filler and never terminates unbounded ones. Negative alpha
+(toward completion) keeps outputs valid and more concise but truncates real
+content. Uniform continuation-counting is the wrong signal; model-probability-
+weighted lookahead would be the real fix, at the cost of extra forward passes.
 
     pip install transformers torch        # plus bpdecode
     python bench/soft_eval.py
@@ -54,9 +60,10 @@ def _run(model_id: str) -> None:
 
     configs = [
         ("hard", dict()),
-        ("soft k3 a0.5", dict(soft_k=3, alpha=0.5)),
-        ("soft k3 a1.0", dict(soft_k=3, alpha=1.0)),
-        ("soft k4 a1.0", dict(soft_k=4, alpha=1.0)),
+        ("soft a=+0.5", dict(soft_k=3, alpha=0.5)),  # toward mass-rich futures
+        ("soft a=+1.0", dict(soft_k=3, alpha=1.0)),
+        ("soft a=-0.3", dict(soft_k=3, alpha=-0.3)),  # toward completion
+        ("soft a=-1.0", dict(soft_k=3, alpha=-1.0)),
     ]
 
     for pname, pattern in PATTERNS.items():
