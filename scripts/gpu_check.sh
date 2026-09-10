@@ -44,5 +44,10 @@ else
   echo "compute-sanitizer not on PATH; skipping (differential above still validates correctness)"
 fi
 
+echo "== benchmarks on GPU =="
+pip install -q 'transformers>=4.40' outlines xgrammar llguidance jsonschema lark || true
+python bench/regex_mask.py --device cuda --batch 64 || echo "(regex bench skipped)"
+python bench/json_schema_mask.py || echo "(json-schema bench skipped)"
+
 echo
-echo "OK -- CUDA kernels match the CPU reference."
+echo "OK -- CUDA kernels match the CPU reference. Bench output above."

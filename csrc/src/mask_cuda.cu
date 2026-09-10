@@ -8,6 +8,13 @@
 //
 // Every array argument is a raw device pointer -- the SoA form the caller
 // uploads once and keeps. See the CUDA section of mask.hpp for the layouts.
+//
+// The per-step entry points (compute_mask / advance_state / apply_mask) launch
+// on `stream` and return without synchronising -- so the mask can overlap the
+// model's forward pass on another stream. Ordering vs. later work on the same
+// stream is guaranteed by CUDA; the caller syncs before it reads the result
+// (e.g. before sampling). build_reachability is a one-time compile step and
+// does sync (it reads a device flag to decide when its fixpoint has converged).
 #include "bpdecode/mask.hpp"
 
 #include <cstdio>
@@ -184,7 +191,6 @@ void compute_mask_batch_cuda(int32_t num_states, int32_t num_symbols,
   compute_mask_kernel<<<batch, kWarp, 0, s>>>(
       trans, num_symbols, num_states, accept, live, dead, offsets, symbols,
       vocab_size, eos_id, states, out_bits, words_per_row);
-  check(cudaStreamSynchronize(s), "sync");
 }
 
 void advance_state_batch_cuda(int32_t num_states, int32_t num_symbols,
@@ -202,7 +208,6 @@ void advance_state_batch_cuda(int32_t num_states, int32_t num_symbols,
   advance_state_kernel<<<grid, block, 0, s>>>(
       trans, num_symbols, num_states, accept, live, dead, offsets, symbols,
       eos_id, states, token_ids, batch, next_states);
-  check(cudaStreamSynchronize(s), "sync");
 }
 
 void apply_mask_batch_cuda(int32_t num_states, int32_t num_symbols,
@@ -217,7 +222,6 @@ void apply_mask_batch_cuda(int32_t num_states, int32_t num_symbols,
   apply_mask_kernel<<<batch, kWarp, 0, s>>>(
       trans, num_symbols, num_states, accept, live, dead, offsets, symbols,
       vocab_size, eos_id, states, logits, neg_inf);
-  check(cudaStreamSynchronize(s), "sync");
 }
 
 }  // namespace bpdecode

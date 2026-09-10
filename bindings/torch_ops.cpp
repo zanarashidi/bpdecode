@@ -21,8 +21,23 @@
 
 #include "bpdecode/mask.hpp"
 
+#if defined(BPDECODE_WITH_CUDA)
+#include <c10/cuda/CUDAStream.h>
+#endif
+
 namespace bpdecode {
 namespace {
+
+// The mask kernels launch on torch's current CUDA stream and do not sync, so
+// they overlap the forward pass; ordering with the sampling that reads `logits`
+// is guaranteed because that runs on the same stream.
+inline void* current_cuda_stream() {
+#if defined(BPDECODE_WITH_CUDA)
+  return c10::cuda::getCurrentCUDAStream().stream();
+#else
+  return nullptr;
+#endif
+}
 
 void check_cpu_layout(const at::Tensor& trans, const at::Tensor& accept,
                       const at::Tensor& live, const at::Tensor& offsets,
@@ -118,7 +133,7 @@ at::Tensor apply_mask_op(at::Tensor logits, const at::Tensor& trans,
         symbols.contiguous().data_ptr<int32_t>(), vocab,
         static_cast<int32_t>(eos_id), st.data_ptr<int32_t>(), batch,
         logits.data_ptr<float>(), static_cast<float>(neg_inf),
-        /*stream=*/nullptr);
+        /*stream=*/current_cuda_stream());
     return logits;
 #else
     TORCH_CHECK(false, "bpdecode was built without CUDA support");
@@ -157,7 +172,7 @@ at::Tensor compute_mask_op(const at::Tensor& trans, const at::Tensor& accept,
         offsets.contiguous().data_ptr<int32_t>(),
         symbols.contiguous().data_ptr<int32_t>(), vocab,
         static_cast<int32_t>(eos_id), st.data_ptr<int32_t>(), batch, out_bits,
-        /*stream=*/nullptr);
+        /*stream=*/current_cuda_stream());
     return out;
 #else
     TORCH_CHECK(false, "bpdecode was built without CUDA support");
@@ -196,7 +211,7 @@ at::Tensor advance_state_op(const at::Tensor& trans, const at::Tensor& accept,
         symbols.contiguous().data_ptr<int32_t>(),
         static_cast<int32_t>(offsets.numel() - 1), static_cast<int32_t>(eos_id),
         st.data_ptr<int32_t>(), tk.data_ptr<int32_t>(), batch,
-        out.data_ptr<int32_t>(), /*stream=*/nullptr);
+        out.data_ptr<int32_t>(), /*stream=*/current_cuda_stream());
     return out;
 #else
     TORCH_CHECK(false, "bpdecode was built without CUDA support");
