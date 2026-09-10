@@ -1,80 +1,126 @@
 # bpdecode
 
-GPU-accelerated **constrained decoding** for LLM inference: compute the
-per-step token mask that keeps generation on a grammar-valid path, batched
-across a serving workload, without stalling the GPU that runs the forward
-pass.
+**Constrained decoding** for LLM inference: at every step, intersect the model's
+next-token distribution with "which tokens keep generation on a grammar-valid
+path" -- batched across a serving workload, on the GPU that holds the logits.
 
-The message-passing core grew out of a CUDA loopy belief-propagation project
-(`loopy-belief-propagation-using-CUDA`) -- reachability in a constraint
-automaton is boolean message passing to a fixpoint, and "soft" lookahead
-guidance is the sum-product version of the same pass.
+Regex, GBNF grammars, and a subset of JSON Schema. The automaton core grew out
+of a CUDA loopy belief-propagation project: reachability in a constraint
+automaton is boolean message-passing to a fixpoint, and the (experimental)
+soft-lookahead pass is its sum-product version.
 
-## Status: Phase 1 (FSA path) -- done
+## Install
 
-Phases 0-1 complete: the regex -> byte-DFA front-end, host FSA export, and the
-batched CUDA mask/advance/apply kernels (validated on an RTX 3090 against the
-CPU reference). Phase 2 (continuous batching + serving integration) is next.
+The wheel compiles `csrc/` and a small torch op extension, so a C++ toolchain
+and `torch` are needed:
 
-| Piece | Module | Notes |
-|---|---|---|
-| regex -> byte DFA | `bpdecode.regex` | Thompson NFA + subset construction; code-point classes lowered to a UTF-8 byte automaton (`regex/utf8.py`), alphabet is raw bytes |
-| token-level automaton | `bpdecode.automaton` | lazy, memoised `step` / `allowed` / `mask` over a `Vocabulary`; consumes raw token bytes (partial-UTF-8 BPE tokens included) |
-| vocabulary loading | `bpdecode.tokenizer` | `from_tokens` for tests; `from_hf` for byte-level BPE (defaults to `Qwen/Qwen2.5-0.5B`, laptop-friendly) |
-| constraint interface | `bpdecode.interface` | `Constraint` protocol + HF `LogitsProcessor` shim |
-| CPU reference | `bpdecode.reference` | `RegexConstraint` -- the correctness oracle for every later backend |
-| FSA export | `bpdecode.fsa` | flatten DFA + vocab into `FsaTable` / `TokenSymbols` (the C++ ABI, ready for CSR upload) + scalar `step` / `compute_mask` / `advance_state` / `apply_mask` mirrors |
-| C++/CUDA core | `csrc/` | `build_reachability` (boolean-BP fixpoint), scalar `compute_mask` / `advance_state` / fused `apply_mask`; matching batched CUDA kernels (warp-per-request, `__ballot_sync`) |
-| torch ops | `bpdecode.ops` | `torch.ops.bpdecode.*` via `scikit-build-core`; CPU + CUDA, dispatched by tensor device |
-
-See [`docs/PLAN.md`](docs/PLAN.md) for the full roadmap (batching, pushdown/CFG,
-sum-product lookahead, perf hardening).
-
-## Quick start
-
-```python
-from bpdecode import RegexConstraint, Vocabulary
-
-vocab = Vocabulary.from_tokens(["a", "b", "ab", "0", "1", "<eos>"], eos_id=5)
-con = RegexConstraint(r"[01]+", vocab)
-
-con.accepts(vocab.token_bytes.index(b"0"))   # -> True
-scores = [0.0] * vocab.size
-con.apply_(scores)                            # disallowed logits -> -inf
+```bash
+pip install torch                    # CPU: --index-url https://download.pytorch.org/whl/cpu
+pip install scikit-build-core cmake ninja
+pip install --no-build-isolation -e '.[hf]'
 ```
 
-Batched, on tensors (CPU now, CUDA when built on a GPU box):
+## Use it
+
+**Regex-constrain a Hugging Face model:**
 
 ```python
-import torch
-from bpdecode.ops import FsaTensors, apply_mask_
+from transformers import AutoModelForCausalLM, AutoTokenizer
+from bpdecode.hf import RegexLogitsProcessor
 
-fsa = FsaTensors.build(r"[01]+", vocab)          # .to("cuda") to run on GPU
-logits = torch.randn(batch, vocab.size)
-apply_mask_(logits, fsa, states)                 # disallowed logits -> -inf, in place
+tok = AutoTokenizer.from_pretrained("Qwen/Qwen2.5-0.5B")
+model = AutoModelForCausalLM.from_pretrained("Qwen/Qwen2.5-0.5B")
+
+lp = RegexLogitsProcessor(r"([0-9]{1,3}\.){3}[0-9]{1,3}", tok)
+ids = tok("The router IP is ", return_tensors="pt").input_ids
+print(tok.decode(model.generate(ids, logits_processor=[lp], max_new_tokens=20)[0]))
+# ... 192.168.1.100
 ```
+
+**JSON Schema:**
+
+```python
+from bpdecode.hf import GrammarLogitsProcessor
+
+schema = {
+    "type": "object",
+    "properties": {"name": {"type": "string", "maxLength": 24},
+                   "year": {"type": "integer"},
+                   "compiled": {"type": "boolean"}},
+    "required": ["name", "year", "compiled"],
+    "additionalProperties": False,
+}
+gp = GrammarLogitsProcessor.from_json_schema(schema, tok)
+# -> {"name": "Rust", "year": 2010, "compiled": true}
+```
+
+**vLLM:** `from bpdecode.vllm import RegexLogitsProcessorFactory` -- pass
+`SamplingParams(logits_processors=[factory.make(pattern)])`.
+
+**Batched, on tensors** (the serving path -- CPU or CUDA by tensor device):
+
+```python
+from bpdecode.batch import GrammarCache, ConstraintBatch
+
+cache = GrammarCache(vocab)                       # compile-once, shared across requests
+batch = ConstraintBatch(cache.get(pattern), capacity=256, device="cuda")
+batch.add(request_id)                             # continuous batching: add / evict / reset
+batch.apply_mask(active_ids, logits)             # one call masks the whole batch
+batch.commit(active_ids, sampled_tokens)         # one call advances it
+```
+
+See [`examples/`](examples/).
+
+## How it works
+
+```
+pattern / grammar / JSON Schema
+   │  regex.compile (Thompson NFA -> subset construction)
+   │  grammar.gbnf / grammar.json_schema -> rule NFAs
+   ▼
+byte automaton            code points lowered to UTF-8 (regex/utf8.py); alphabet is raw bytes
+   │  fsa.token_symbols  ×  the tokenizer's byte strings
+   ▼
+token-level table         tok_next[state][token]  (dense, or lazy for a CFG's pushdown)
+   │
+   ▼
+per-step mask / advance    one kernel launch over the batch (torch.ops.bpdecode.*)
+```
+
+- **Regular** grammars (regex, and GBNF/JSON-Schema rules with no recursion)
+  compile to a byte DFA and a dense `tok_next` table -- a decode step is a
+  gather.
+- **Context-free** grammars run a config-set pushdown automaton
+  (`grammar.pda`); masks are memoised on the compiled grammar (keyed by
+  config-set) and regular sub-loops (`json-char*` etc.) are spliced out to the
+  dense path.
+- **CUDA**: `csrc/` has the batched kernels (one warp per request,
+  `__ballot_sync` token packing); validated on an RTX 3090 against the CPU
+  reference (`scripts/gpu_check.sh`).
+
+## Benchmarks
+
+`bench/RESULTS.md`. Against `outlines_core`, `xgrammar`, `llguidance` on a
+151k-token vocab (CPU): compile time is comparable; steady-state per-token mask
+is **~0.6 µs** (memoised) -- an order of magnitude under xgrammar. The cost is a
+one-time per-grammar warmup. Soft lookahead: **negative result**, recorded
+honestly -- count-based continuation weighting over-extends and doesn't beat
+hard masking.
+
+## Status
+
+Phases 0-4 complete (see [`docs/PLAN.md`](docs/PLAN.md)). Phase 5 (perf
+hardening + release) in progress; a GPU pushdown kernel and multi-GPU are
+deferred.
 
 ## Development
 
-The build compiles `csrc/` and the torch op extension via `scikit-build-core`,
-so a C++ toolchain and `torch` are needed:
-
 ```bash
-pip install torch            # or the CPU wheel: --index-url https://download.pytorch.org/whl/cpu
-pip install scikit-build-core cmake ninja
 pip install --no-build-isolation -e '.[dev]'
 pytest
 ruff check .
-```
-
-The `csrc/` tree also builds standalone with CMake (CUDA optional):
-
-```bash
 cmake -S csrc -B build-cpp && cmake --build build-cpp && ctest --test-dir build-cpp
 ```
-
-CUDA kernels are validated on a GPU box with `scripts/gpu_check.sh` (or the
-manual `gpu` GitHub workflow).
 
 ## License
 

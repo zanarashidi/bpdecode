@@ -20,13 +20,25 @@ from .regex import compile_regex
 from .regex.compile import DFA
 from .tokenizer import Vocabulary
 
+# The native extension registers torch.ops.bpdecode.* (the scalar CPU kernels
+# and, where built, the CUDA ones). It is optional: the dense `tok_next` path is
+# pure torch and is what regex / JSON-Schema masking uses on CPU and GPU. The
+# ops are only needed for a non-densified FsaTensors or the raw torch.ops API.
 try:
-    from . import _C as _C  # noqa: F401  (dlopen side effect: registers torch.ops.bpdecode)
-except ImportError as exc:  # pragma: no cover - build/packaging issue
-    raise ImportError(
-        "bpdecode._C is not built; reinstall with a C++ toolchain and torch "
-        "available (`pip install -e .`)"
-    ) from exc
+    from . import _C as _C  # noqa: F401  (dlopen side effect: registers the ops)
+
+    HAVE_NATIVE = True
+except ImportError:  # pragma: no cover - built without the extension
+    HAVE_NATIVE = False
+
+
+def _require_native() -> None:
+    if not HAVE_NATIVE:
+        raise RuntimeError(
+            "this path needs the bpdecode native extension (torch.ops.bpdecode.*), "
+            "which is not built. Use a dense FsaTensors (the default for small "
+            "automata; force with `dense=True`) or reinstall with a C++ toolchain."
+        )
 
 
 @dataclass
@@ -262,6 +274,7 @@ def apply_mask_(
         rejected = fsa.tok_next.index_select(0, s.clamp_(min=0)) == -1  # [B, V]
         rejected |= broken.unsqueeze(1)
         return logits.masked_fill_(rejected, neg_inf)
+    _require_native()
     return torch.ops.bpdecode.apply_mask_(
         logits, fsa.trans, fsa.accept, fsa.live, fsa.num_symbols, fsa.dead,
         fsa.offsets, fsa.symbols, fsa.eos_id, states, neg_inf,
@@ -272,6 +285,7 @@ def compute_mask(fsa: FsaTensors, states: torch.Tensor) -> torch.Tensor:
     """Packed allow-mask, ``uint32`` bits in an int32 tensor [batch, ceil(vocab/32)]
     (LSB-first); one grammar state per row.
     """
+    _require_native()
     return torch.ops.bpdecode.compute_mask(
         fsa.trans, fsa.accept, fsa.live, fsa.num_symbols, fsa.dead,
         fsa.offsets, fsa.symbols, fsa.eos_id, states,
@@ -290,6 +304,7 @@ def advance_state(
         broken = s < 0
         nxt = fsa.tok_next[s.clamp_(min=0), t]
         return torch.where(broken, torch.full_like(nxt, -1), nxt).to(torch.int32)
+    _require_native()
     return torch.ops.bpdecode.advance_state(
         fsa.trans, fsa.accept, fsa.live, fsa.num_symbols, fsa.dead,
         fsa.offsets, fsa.symbols, fsa.eos_id, states, token_ids,
