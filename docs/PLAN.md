@@ -145,7 +145,7 @@ CUDA kernels -- written, run only on GPU CI (`.github/workflows/gpu.yml`,
       GPU-batch rerun pending.
 - [ ] end-to-end demo (Qwen2.5-0.5B) -- after the remaining phases.
 
-### Phase 3 -- CFG / pushdown (JSON Schema, GBNF) *(done; GPU kernels pending pod)*
+### Phase 3 -- CFG / pushdown (JSON Schema, GBNF) *(done)*
 
 - [x] GBNF front-end: `bpdecode.grammar` -- `parse_gbnf` -> `Grammar` IR
       (regex AST + `Ref`); `{m,n}` sugar expanded; `Grammar.is_regular()`.
@@ -185,10 +185,14 @@ CUDA kernels -- written, run only on GPU CI (`.github/workflows/gpu.yml`,
       `tests/test_pda_device.py`: exhaustive short strings + random walks over
       3 grammars incl. self-recursion). `PdaConfigSet` is padding-free by
       construction (`static_assert`ed) so a flat `torch.int32` tensor
-      round-trips as the C struct with no copy. **CUDA kernels written,
-      pending a pod run** (`tests/test_pda_cuda.py`, wired into
-      `scripts/gpu_check.sh`). Not yet wired into `CFGConstraint` /
-      `GrammarLogitsProcessor` (those still use the CPU path, which is faster
+      round-trips as the C struct with no copy. **Validated on an RTX 3090**
+      (`tests/test_pda_cuda.py`, wired into `scripts/gpu_check.sh`):
+      24/24 pytest (incl. the 2 new PDA cases), `compute-sanitizer` 0 errors.
+      Caught and fixed one real bug this way -- `pda_init` always ran on the
+      host but returned a CPU tensor regardless of the grammar's device, so
+      `gpu.init_batch()` silently handed back a CPU config-set. Not yet wired
+      into `CFGConstraint` / `GrammarLogitsProcessor` (those still use the CPU
+      path, which is faster
       once warm anyway); this is the standalone device API for a future
       GPU-resident serving loop.
 - [x] context-independent token split: `grammar/regular.py` -- when a top frame
