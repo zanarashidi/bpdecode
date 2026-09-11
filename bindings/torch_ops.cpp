@@ -317,7 +317,10 @@ at::Tensor pda_init_op(const at::Tensor& accept, const at::Tensor& live,
   auto out = at::empty({kPdaConfigFlat}, at::kInt);
   static_assert(sizeof(PdaConfigSet) == sizeof(int32_t) * kPdaConfigFlat, "");
   std::memcpy(out.data_ptr<int32_t>(), &cfg, sizeof(PdaConfigSet));
-  return out;
+  // pda_init always runs on the host (it's a cheap one-off); move the result
+  // to wherever the caller's grammar tensors live so e.g. gpu.init_batch()
+  // doesn't silently hand back a CPU tensor.
+  return out.to(accept.device());
 }
 
 at::Tensor pda_apply_mask_op(at::Tensor logits, const at::Tensor& accept,
