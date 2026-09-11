@@ -213,7 +213,7 @@ CUDA kernels -- written, run only on GPU CI (`.github/workflows/gpu.yml`,
 Also this phase: regex parser gained `{m,n}` counted repetition;
 `Vocabulary.from_hf` now sizes to `len(tok)` (covers the EOS / added tokens).
 
-### Phase 5 -- perf hardening & release *(in progress)*
+### Phase 5 -- perf hardening & release *(core done)*
 
 - [x] examples: `examples/generate_hf.py` (regex + JSON Schema constrained HF
       generation), `examples/serve_batch.py` (continuous-batching loop).
@@ -223,12 +223,14 @@ Also this phase: regex parser gained `{m,n}` counted repetition;
 - [x] `release.yml` -- sdist on tag (the wheel is a torch extension, one build
       per python x torch x CUDA, so pip compiles it against the user's torch).
 - [x] kernel stream overlap: the per-step CUDA entry points no longer sync;
-      `torch_ops.cpp` runs them on `getCurrentCUDAStream()`. **Needs a pod to
-      re-validate `tests/test_cuda.py`.**
-- [ ] **GPU (pod):** run `scripts/gpu_check.sh` -- re-validate the kernels and
-      record `--device cuda` bench numbers.
+      `torch_ops.cpp` runs them on `getCurrentCUDAStream()`. Re-validated on an
+      RTX 3090 -- 22-case differential + `compute-sanitizer` clean.
+- [x] GPU bench (`scripts/gpu_check.sh`, RTX 3090, batch 64): regex dense mask
+      **~8 us/token flat**, beats `outlines_core` on realistic patterns; JSON
+      Schema warm **~1 us** vs xgrammar 6-14 us / llguidance 53-64 us. See
+      `bench/RESULTS.md`.
 - [ ] persistent constraint kernel; Nsight tuning; multi-GPU (shard by
-      request -- state is tiny). Serving-integration work, lower priority.
+      request -- state is tiny). Serving-integration polish, lower priority.
 
 ## Key risks
 

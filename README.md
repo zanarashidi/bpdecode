@@ -101,11 +101,17 @@ per-step mask / advance    one kernel launch over the batch (torch.ops.bpdecode.
 ## Benchmarks
 
 `bench/RESULTS.md`. Against `outlines_core`, `xgrammar`, `llguidance` on a
-151k-token vocab (CPU): compile time is comparable; steady-state per-token mask
-is **~0.6 µs** (memoised) -- an order of magnitude under xgrammar. The cost is a
-one-time per-grammar warmup. Soft lookahead: **negative result**, recorded
-honestly -- count-based continuation weighting over-extends and doesn't beat
-hard masking.
+151k-token vocab:
+
+- **regex**, per-token mask: ~8 µs on GPU (flat across patterns, beats
+  `outlines_core` on realistic ones); ~90-140 µs on CPU.
+- **JSON Schema**, warm: **~1 µs** -- an order of magnitude under xgrammar,
+  ~50x under llguidance. The cost is a one-time per-grammar warmup.
+- **soft lookahead**: negative result, recorded honestly -- count-based
+  continuation weighting over-extends and doesn't beat hard masking.
+
+CUDA kernels validated on an RTX 3090 (`scripts/gpu_check.sh`): differential
+vs the CPU reference + `compute-sanitizer`, clean.
 
 ## Status
 

@@ -11,8 +11,22 @@ per sequence.
 
 The steady-state numbers assume a warm cache: the first request with a new
 grammar pays ~0.2 s, and a token trie is built once per vocabulary (~0.5 s).
-Both are one-time and shared across all requests. GPU numbers pending
-(`scripts/gpu_check.sh` on a pod).
+Both are one-time and shared across all requests.
+
+## GPU (RTX 3090, batch 64)
+
+`gpu_check.sh` -- kernels validated (8 gtests, 22-case CUDA-vs-CPU
+differential, `compute-sanitizer` clean) and:
+
+| | per-token mask |
+|---|---|
+| regex, dense `tok_next` gather | **~8 µs, flat across patterns** (email 9.9, ipv4 7.9, sentence 8.5, json 7.7); Outlines: 312 / 4.3 / 560 / 54 |
+| regex, byte-walk CUDA kernel (non-dense fallback) | 61-134 µs |
+| JSON Schema, warm | **~1 µs**; xgrammar 6-14 µs, llguidance 53-64 µs |
+
+On GPU the dense gather is a fixed ~8 µs regardless of grammar complexity --
+it beats `outlines_core` on every non-trivial pattern and stays ~2 µs behind
+only on `ipv4` (a 5-state FSM where Outlines is a bare memcpy).
 
 Detail follows.
 
