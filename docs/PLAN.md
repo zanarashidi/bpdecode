@@ -38,10 +38,13 @@ src/bpdecode/     host front-end (Python): regex/PDA compilers, TokenDFA,
   vllm.py                      vLLM request- / batch-level logits processors
   grammar/                     GBNF -> IR -> rule NFAs -> config-set PDA;
                                CFGConstraint (CPU oracle for CFGs)
+    device.py                  flatten CompiledGrammar -> torch.ops.bpdecode.pda_* tensors
 csrc/             C++/CUDA core: FsaTable/TokenSymbols ABI, mask kernels
-  include/bpdecode/mask.hpp    the ABI callers compile against
+  include/bpdecode/mask.hpp    the FSA ABI callers compile against
+  include/bpdecode/pda.hpp     the PDA ABI; header-only host+device primitives
   src/mask_cpu.cpp             scalar reference + build_reachability
-  src/mask_cuda.cu             batched kernels (warp/request, __ballot_sync)
+  src/mask_cuda.cu             batched FSA kernels (warp/request, __ballot_sync)
+  src/pda_cpu.cpp / pda_cuda.cu   batched PDA kernels (bounded config-set)
 bindings/torch_ops.cpp       ATen glue -> torch.ops.bpdecode.* (CPU + CUDA)
 CMakeLists.txt    top-level build (scikit-build-core): csrc core + torch op
 bindings/         HF / vLLM LogitsProcessor adapters (Phase 2)
@@ -142,7 +145,7 @@ CUDA kernels -- written, run only on GPU CI (`.github/workflows/gpu.yml`,
       GPU-batch rerun pending.
 - [ ] end-to-end demo (Qwen2.5-0.5B) -- after the remaining phases.
 
-### Phase 3 -- CFG / pushdown (JSON Schema, GBNF) *(in progress)*
+### Phase 3 -- CFG / pushdown (JSON Schema, GBNF) *(done; GPU kernels pending pod)*
 
 - [x] GBNF front-end: `bpdecode.grammar` -- `parse_gbnf` -> `Grammar` IR
       (regex AST + `Ref`); `{m,n}` sugar expanded; `Grammar.is_regular()`.
@@ -168,13 +171,26 @@ CUDA kernels -- written, run only on GPU CI (`.github/workflows/gpu.yml`,
 - [x] `GrammarLogitsProcessor` (`hf.py`) + `.from_json_schema` -- per-row
       `CFGConstraint`, drops into `model.generate()`. Tested vs `CFGConstraint`
       step by step; generates valid JSON.
-- [ ] persistent per-request execution stack; `compute_mask_pda` /
-      `advance_state_pda` GPU kernels (push / pop, depth cap). **Deferred** --
-      the memoised CPU mask (~0.6 us/token) already beats xgrammar, which also
-      computes masks on CPU and only *applies* them on GPU. The useful GPU
-      piece is a packed-bitmask apply (the FSA path's `apply_mask_` already
-      does the equivalent); full on-device PDA is a lot of work off the
-      critical path. Revisit if a profiler says otherwise.
+- [x] `compute_mask_pda` / `advance_state_pda` / `apply_mask_pda` GPU kernels
+      (`csrc/include/bpdecode/pda.hpp`, `pda_cpu.cpp`, `pda_cuda.cu`). The
+      state is a *bounded config-set* -- up to `kPdaMaxConfigs` (8) alternative
+      stacks, each up to `kPdaMaxDepth` (32) frames, fixed-size device arrays,
+      generous for JSON-Schema-scale grammars; a grammar that needs more
+      silently saturates (documented, not expected in practice). The
+      closure/push/pop/step primitives are header-only `__host__ __device__`
+      templates used verbatim by both the CPU reference and the CUDA kernels,
+      so they cannot drift apart -- validated with a hand-built recursive
+      grammar (`(x)`, `((x))`, unbalanced-paren rejection: 18 gtests) and a
+      Python differential vs `grammar.pda.PDA` (`bpdecode.grammar.device`,
+      `tests/test_pda_device.py`: exhaustive short strings + random walks over
+      3 grammars incl. self-recursion). `PdaConfigSet` is padding-free by
+      construction (`static_assert`ed) so a flat `torch.int32` tensor
+      round-trips as the C struct with no copy. **CUDA kernels written,
+      pending a pod run** (`tests/test_pda_cuda.py`, wired into
+      `scripts/gpu_check.sh`). Not yet wired into `CFGConstraint` /
+      `GrammarLogitsProcessor` (those still use the CPU path, which is faster
+      once warm anyway); this is the standalone device API for a future
+      GPU-resident serving loop.
 - [x] context-independent token split: `grammar/regular.py` -- when a top frame
       sits in a regular loop (`json-char*` etc.), splice the residual out
       (inlining regular callees), compile to a byte DFA, and take the mask from

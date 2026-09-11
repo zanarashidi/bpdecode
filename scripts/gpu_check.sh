@@ -34,12 +34,12 @@ CMAKE_ARGS="-DCMAKE_CUDA_ARCHITECTURES=native" \
   pip install --no-build-isolation -e .
 
 echo "== CUDA vs CPU differential =="
-pytest tests/test_cuda.py -v
+pytest tests/test_cuda.py tests/test_pda_cuda.py -v
 
 echo "== compute-sanitizer (memcheck) =="
 if command -v compute-sanitizer >/dev/null 2>&1; then
   compute-sanitizer --tool memcheck --error-exitcode 1 \
-    python -m pytest tests/test_cuda.py -q
+    python -m pytest tests/test_cuda.py tests/test_pda_cuda.py -q
 else
   echo "compute-sanitizer not on PATH; skipping (differential above still validates correctness)"
 fi
