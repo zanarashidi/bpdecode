@@ -1,9 +1,12 @@
 """bpdecode -- GPU-accelerated constrained decoding for LLM inference.
 
-Phase 0 ships the host-side scaffolding only: a regex -> DFA front-end, a
-token-level automaton, the :class:`Constraint` interface, and a CPU reference
-implementation used as the correctness oracle for the CUDA kernels that land
-in later phases.  See ``docs/PLAN.md`` for the roadmap.
+This top-level module holds the host-side building blocks: a regex -> DFA
+front-end, a token-level automaton, the :class:`Constraint` interface, and a
+CPU reference implementation (:class:`RegexConstraint`) used as the
+correctness oracle for the batched CUDA kernels and the context-free-grammar
+path.  See ``bpdecode.ops`` / ``bpdecode.batch`` for the tensor-batched
+serving path, ``bpdecode.hf`` / ``bpdecode.vllm`` for the framework adapters,
+and ``bpdecode.grammar`` for GBNF / JSON Schema support.
 """
 
 from __future__ import annotations

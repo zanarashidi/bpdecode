@@ -1,6 +1,7 @@
 """Model-weighted 1-step lookahead: does weighting by the model's own
 next-token probability (instead of uniform continuation counts) fix the
-Phase-4 negative result?
+negative result from `bpdecode.ops.build_lookahead` / `apply_soft_` (see
+bench/RESULTS.md)?
 
 Bounded experiment, not core library code: at each step, take the top-K
 grammar-allowed candidates by the current logit, run ONE extra batched forward
@@ -11,7 +12,8 @@ by how much of *that* distribution lands on a grammar-valid continuation:
 
 This costs K extra forward passes per decode step (batched into one call),
 regardless of how many tokens the grammar allows -- unlike the k-step
-automaton sum-product (Phase 4), the weight comes from the model, not a count.
+automaton sum-product in `build_lookahead`, the weight comes from the model,
+not a count.
 
     pip install transformers torch        # plus bpdecode
     python bench/soft_eval_modelweighted.py

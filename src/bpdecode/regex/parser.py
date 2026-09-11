@@ -6,12 +6,13 @@ Supported syntax:
     ``.``            any Unicode scalar (lowered to its UTF-8 bytes downstream)
     ``*`` ``+`` ``?``  greedy quantifiers (greediness is irrelevant for
                        language membership, which is all we use)
+    ``{m,n}`` ``{m,}`` ``{m}``  counted repetition
     ``a|b``          alternation
     ``(...)``        grouping
     ``[abc]`` ``[a-z]`` ``[^...]``  character classes
 
-Not yet supported: counted repetition ``{m,n}``, anchors, backreferences,
-lookaround, named groups. These raise :class:`RegexSyntaxError`.
+Not supported: anchors, backreferences, lookaround, named groups. These raise
+:class:`RegexSyntaxError`.
 """
 
 from __future__ import annotations
@@ -22,7 +23,7 @@ UNICODE_MAX = 0x10FFFF  # AST ranges are code points; compile.py lowers them to 
 
 
 class RegexSyntaxError(ValueError):
-    """Raised for regex constructs the Phase 0 parser does not implement."""
+    """Raised for regex constructs this parser does not implement."""
 
 
 # --- AST -------------------------------------------------------------------

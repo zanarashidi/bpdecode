@@ -1,7 +1,7 @@
 // bpdecode -- constraint-automaton token masking (host + device).
 //
-// Phase 0 defines the ABI and ships a scalar CPU implementation used as a
-// reference. The batched CUDA kernels land in Phase 1 behind BPDECODE_WITH_CUDA.
+// This header defines the ABI: a scalar CPU implementation used as a
+// reference, plus the batched CUDA kernels behind BPDECODE_WITH_CUDA.
 #pragma once
 
 #include <cstdint>

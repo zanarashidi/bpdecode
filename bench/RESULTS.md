@@ -74,10 +74,11 @@ This is still **CPU**, where a step is `[batch, 151 k]` tensor ops with no real
 parallelism. Rerun `--device cuda --batch 64` on the GPU box for the comparison
 that matters.
 
-**The bet.** Hard-masking is a solved problem. bpdecode's dense path is now
-competitive; the actual differentiator is the Phase 4 soft-lookahead layer
-(a weighted backward pass Outlines/XGrammar don't have) and GPU batch
-amortization.
+**The bet.** Hard-masking is a solved problem, and bpdecode's dense path is
+competitive with it. The soft-lookahead layer further down this file was meant
+to be the differentiator (a weighted backward pass Outlines/XGrammar don't
+have); the count-based version of it doesn't beat hard masking -- see that
+section for the honest result and the model-weighted follow-up that does.
 
 ---
 
@@ -110,12 +111,12 @@ shared across every request. So:
 xgrammar does the equivalent precompute in C++ at matcher-creation time, so its
 cold path is already fast; it has no warm speedup to give. For a serving
 workload where one schema handles thousands of requests, bpdecode's warm number
-is what matters. The warmup is the price; hiding it (precompute at compile,
-move the trie build to the C++ core) is Phase 5.
+is what matters. The warmup is the price; hiding it means precomputing at
+compile time and moving the trie build into the C++ core -- not done yet.
 
 ---
 
-# soft_eval.py -- soft lookahead vs hard masking (Phase 4)
+# soft_eval.py -- soft lookahead vs hard masking
 
 Qwen2.5-0.5B, greedy, 10 "describe X as JSON" prompts, constrained to a regex
 for `{"name": "...", "year": N}`. `k = 3` backward steps.
@@ -155,8 +156,8 @@ valid-but-dead-end tokens.
   It is a usable "terseness" knob, not an accuracy win -- hard masking plus a
   competent model already produces the full name.
 - The token-level formulation *does* correctly prune tokens with no valid
-  *token* continuation (the Phase 3 partial-token dead end) -- that part works
-  and is kept.
+  *token* continuation (a token that is a valid byte-level prefix but that no
+  other token can complete) -- that part works and is kept.
 
 **Why:** uniform continuation-counting ignores the model's own distribution.
 The continuations soft lookahead rewards are mostly ones the model would never
@@ -193,8 +194,8 @@ Identical to hard masking on every case here (the model already wanted these
 completions), and -- unlike the count-based version -- **no padding
 degeneration** on the bounded-length pattern either.
 
-**Reading:** the Phase 4 hypothesis was right about the *shape* of the fix
-(bias the mask toward better continuations) but wrong about the *signal*
+**Reading:** the soft-lookahead hypothesis was right about the *shape* of the
+fix (bias the mask toward better continuations) but wrong about the *signal*
 (raw continuation count vs. the model's own probability). Weighting by real
 next-token probability, even just one step ahead, removes the over-extension
 pathology while keeping the token-level structural pruning (a candidate whose

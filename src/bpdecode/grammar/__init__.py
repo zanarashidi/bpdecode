@@ -1,4 +1,4 @@
-"""Context-free grammar constrained decoding (Phase 3).
+"""Context-free grammar constrained decoding.
 
 * :mod:`~bpdecode.grammar.gbnf` -- parse GBNF source to a :class:`Grammar`
 * :mod:`~bpdecode.grammar.ir` -- the grammar IR (regex AST + :class:`Ref`)

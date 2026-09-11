@@ -1,7 +1,7 @@
 """Vocabulary loading.
 
 A :class:`Vocabulary` is the bridge between token ids and the byte strings the
-automaton consumes.  Phase 0 keeps this deliberately small:
+automaton consumes:
 
 * ``from_tokens`` -- build directly from a list of strings (used by tests and
   toy grammars).
@@ -9,7 +9,7 @@ automaton consumes.  Phase 0 keeps this deliberately small:
   BPE token id to the exact bytes it contributes is genuinely fiddly
   (byte-level BPE, partial UTF-8, added tokens); the implementation here
   handles the common GPT-2 byte-level case and falls back to ``decode`` with a
-  logged caveat.  Getting this fully right is tracked for Phase 1.
+  logged caveat for anything else.
 
 ``from_hf`` defaults to :data:`DEFAULT_MODEL` (``Qwen/Qwen2.5-0.5B``), a small
 GPT-2-style byte-level BPE tokenizer that runs comfortably on a laptop.

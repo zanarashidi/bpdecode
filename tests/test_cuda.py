@@ -1,8 +1,8 @@
 """CUDA kernels vs the CPU reference, over a regex suite.
 
-Skipped unless a CUDA device is visible. This is the differential that closes
-the Phase 1 "CUDA vs CPU" checkbox; it runs on GPU CI
-(`.github/workflows/gpu.yml`), not on a laptop.
+Skipped unless a CUDA device is visible. This is the CUDA-vs-CPU differential;
+it runs on GPU CI (`.github/workflows/gpu.yml`) or `scripts/gpu_check.sh`, not
+on a laptop.
 """
 
 from __future__ import annotations

@@ -3,8 +3,8 @@
 :class:`FsaTable` and :class:`TokenSymbols` mirror the structs in
 ``csrc/include/bpdecode/mask.hpp`` field for field.  The host front-end builds
 them from a compiled :class:`~bpdecode.regex.compile.DFA` and a
-:class:`~bpdecode.tokenizer.Vocabulary`; Phase 1 uploads them to the device as
-CSR / SoA arrays.
+:class:`~bpdecode.tokenizer.Vocabulary`; :mod:`bpdecode.ops` uploads them to
+the device as CSR / SoA arrays.
 
 Two builders:
 

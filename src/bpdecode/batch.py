@@ -13,9 +13,9 @@ compiled DFA across identical grammars".
 so a batch where many rows share a state, or a sequence revisiting a state,
 skips the mask kernel.  Pass ``mask_cache=True`` to :class:`ConstraintBatch`.
 
-Phase 2 scope: a single grammar per batch (the common case -- every request
+Current scope: a single grammar per batch (the common case -- every request
 against the same JSON schema). Mixed-grammar batches are grouped by the caller
-for now; native grouping is a follow-up.
+for now; native grouping is a possible follow-up.
 """
 
 from __future__ import annotations

@@ -95,8 +95,11 @@ per-step mask / advance    one kernel launch over the batch (torch.ops.bpdecode.
   config-set) and regular sub-loops (`json-char*` etc.) are spliced out to the
   dense path.
 - **CUDA**: `csrc/` has the batched kernels (one warp per request,
-  `__ballot_sync` token packing); validated on an RTX 3090 against the CPU
-  reference (`scripts/gpu_check.sh`).
+  `__ballot_sync` token packing) for both paths, validated on an RTX 3090
+  against the CPU reference (`scripts/gpu_check.sh`). The pushdown kernel
+  (`bpdecode.grammar.device`) is a standalone device API -- not yet wired
+  into `CFGConstraint` / `GrammarLogitsProcessor`, which use the (faster,
+  once warm) CPU path today.
 
 ## Benchmarks
 
@@ -108,16 +111,12 @@ per-step mask / advance    one kernel launch over the batch (torch.ops.bpdecode.
 - **JSON Schema**, warm: **~1 µs** -- an order of magnitude under xgrammar,
   ~50x under llguidance. The cost is a one-time per-grammar warmup.
 - **soft lookahead**: negative result, recorded honestly -- count-based
-  continuation weighting over-extends and doesn't beat hard masking.
+  continuation weighting over-extends and doesn't beat hard masking. A 1-step
+  model-probability-weighted variant fixes it (`bench/soft_eval_modelweighted.py`)
+  at the cost of extra forward passes per decode step; not productionised.
 
 CUDA kernels validated on an RTX 3090 (`scripts/gpu_check.sh`): differential
 vs the CPU reference + `compute-sanitizer`, clean.
-
-## Status
-
-Phases 0-4 complete (see [`docs/PLAN.md`](docs/PLAN.md)). Phase 5 (perf
-hardening + release) in progress; a GPU pushdown kernel and multi-GPU are
-deferred.
 
 ## Development
 

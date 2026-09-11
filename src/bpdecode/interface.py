@@ -7,8 +7,8 @@ exposes three things the decoding loop needs:
 * ``advance(token_id)``   -- commit to a token, moving the state forward
 * ``fill_mask(out)``      -- write the full allow-mask for the current state
 
-The Phase 0 reference (:mod:`bpdecode.reference`) implements this on the CPU and
-is the correctness oracle for every later backend.  ``__call__`` gives a
+The CPU reference (:mod:`bpdecode.reference`) implements this and is the
+correctness oracle for every other backend.  ``__call__`` gives a
 Hugging Face ``LogitsProcessor``-compatible shim so the same object can be
 dropped into ``model.generate`` for end-to-end demos.
 

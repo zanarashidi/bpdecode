@@ -2,7 +2,7 @@
 
 `bpdecode.fsa` flattens a compiled DFA + vocabulary into the POD arrays the
 C++/CUDA core consumes, and re-implements the scalar `step` / `compute_mask`
-semantics.  These tests pin that export against `TokenDFA`, the Phase 0 oracle.
+semantics.  These tests pin that export against `TokenDFA`, the reference.
 """
 
 from __future__ import annotations

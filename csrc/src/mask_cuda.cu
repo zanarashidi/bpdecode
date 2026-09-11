@@ -1,6 +1,6 @@
 // Batched constraint-mask kernels.
 //
-// Layout / modernization choices (see docs/PLAN.md):
+// Layout / modernization choices:
 //   * one warp per request, lanes stride over the vocab
 //   * __ballot_sync packs 32 token verdicts into one uint32 mask word
 //   * transition table read straight from global memory as SoA / CSR
