@@ -206,9 +206,16 @@ CUDA kernels -- written, run only on GPU CI (`.github/workflows/gpu.yml`,
       own distribution; a real lookahead needs model-probability weighting
       (extra forward passes). The machinery + API ship with the negative
       result recorded; the token-level dead-end pruning is kept.
-- [ ] (if revisited) model-weighted lookahead; port `build_lookahead` /
-      `apply_soft` to CUDA (bf16, CUDA-graph the fixed-k loop -- structurally
-      identical to `build_token_transitions`).
+- [x] follow-up: is model probability the missing signal? `bench/soft_eval_
+      modelweighted.py` -- a bounded 1-step experiment, K extra forward passes
+      per decode step (not core library code). **Confirms it**: 6/6 complete
+      on the pattern where count-based soft got 0/6, no padding degeneration,
+      identical output to hard masking on every case tried. Not productionised
+      (real per-step cost); a full k-step version is the natural next step if
+      warranted.
+- [ ] port `build_lookahead` / `apply_soft` to CUDA (bf16, CUDA-graph the
+      fixed-k loop -- structurally identical to `build_token_transitions`) --
+      only worth it once/if a model-weighted version is built.
 
 Also this phase: regex parser gained `{m,n}` counted repetition;
 `Vocabulary.from_hf` now sizes to `len(tok)` (covers the EOS / added tokens).

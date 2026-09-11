@@ -168,3 +168,38 @@ forward passes -- a heavier technique, out of scope here.
 for structured output. The machinery ships (it is the same backward
 sum-product as `build_reachability`, and the API / knob are there for
 model-weighted experiments), with this negative result recorded.
+
+---
+
+# soft_eval_modelweighted.py -- follow-up: is model probability the fix?
+
+Same setup (Qwen2.5-0.5B, greedy, unbounded `[A-Za-z .]+` name field, where
+count-based soft lookahead got 0/6 complete). Replaces the uniform
+continuation count with a **1-step model-weighted** lookahead: take the top-K
+(K=6) grammar-allowed candidates by the current logit, run one batched extra
+forward pass to get each candidate's next-step distribution, and score by how
+much of *that* distribution lands on a grammar-valid continuation --
+`score(t) = logit(t) + alpha * log P(next token grammar-valid | took t)`. Cost
+is K extra forward passes per step, independent of how many tokens the
+grammar allows (unlike the k-step automaton sum-product).
+
+| config | complete | sample |
+|---|---:|---|
+| hard masking | 6/6 | `Louis Armstrong`, `Mont Blanc`, `Python`, `Bubo bubo` |
+| count-based soft (α=+0.5) | 0/6 | (never terminates) |
+| **model-weighted 1-step (α=1.0)** | **6/6** | `Louis Armstrong`, `Mont Blanc`, `Python`, `Bubo bubo`, `Sicilian Defense`, `Chiffon` |
+
+Identical to hard masking on every case here (the model already wanted these
+completions), and -- unlike the count-based version -- **no padding
+degeneration** on the bounded-length pattern either.
+
+**Reading:** the Phase 4 hypothesis was right about the *shape* of the fix
+(bias the mask toward better continuations) but wrong about the *signal*
+(raw continuation count vs. the model's own probability). Weighting by real
+next-token probability, even just one step ahead, removes the over-extension
+pathology while keeping the token-level structural pruning (a candidate whose
+only continuations are grammar-dead still scores `-inf`, via the same masking
+machinery). The cost is real -- K extra forward passes per decode step -- so
+this is a mode for cases that need the guidance (weak models, tricky
+schemas), not a default. A full k-step version is the natural next step if
+this is worth productionising; not built here.
