@@ -91,27 +91,6 @@ batch.apply_mask(active_ids, logits)             # one call masks the whole batc
 batch.commit(active_ids, sampled_tokens)         # one call advances it
 ```
 
-```mermaid
-%%{init: {"theme": "base", "themeVariables": {"primaryColor": "#1f6feb", "primaryTextColor": "#fff", "primaryBorderColor": "#1f6feb", "lineColor": "#8b949e", "actorBkg": "#1f6feb", "actorTextColor": "#fff", "actorBorder": "#1f6feb", "signalColor": "#8b949e", "signalTextColor": "#6e7781", "noteBkgColor": "#fff8c5", "noteBorderColor": "#d4a72c", "fontSize": "12px"}, "sequence": {"actorMargin": 30, "boxMargin": 4, "messageMargin": 16, "noteMargin": 4, "height": 26, "width": 90}}}%%
-sequenceDiagram
-    autonumber
-    participant Server as serving loop
-    participant Cache as GrammarCache
-    participant Batch as ConstraintBatch
-
-    Server->>Cache: get(pattern)
-    Cache-->>Server: shared compiled grammar
-    Server->>Batch: add(request) / evict(request)
-
-    rect rgba(31, 111, 235, 0.08)
-    loop every decode step, whole batch
-        Server->>Batch: apply_mask(active_ids, logits)
-        Server->>Server: sample from masked logits
-        Server->>Batch: commit(active_ids, sampled_tokens)
-    end
-    end
-```
-
 See [`examples/`](examples/).
 
 **No model, no tensors:** `RegexConstraint` is the plain-Python automaton --
@@ -128,6 +107,27 @@ con.accepts(vocab.token_bytes.index(b"0"))   # -> True
 ```
 
 ## How it works
+
+```mermaid
+%%{init: {"theme": "base", "themeVariables": {"primaryColor": "#f6f8fa", "primaryTextColor": "#24292f", "primaryBorderColor": "#8b949e", "lineColor": "#8b949e", "fontSize": "11px"}, "flowchart": {"nodeSpacing": 20, "rankSpacing": 30, "padding": 6}}}%%
+flowchart LR
+    A(["pattern / GBNF / schema"]) --> B["byte automaton"]
+    B --> C{"regular?"}
+    C -- yes --> D["dense tok_next table"]
+    C -- no --> E["pushdown automaton"]
+    E -- "sub-loop spliced out" --> D
+    D --> F["mask / advance kernel"]
+    E -- "structural positions" --> F
+
+    classDef entry fill:#eaeef2,stroke:#57606a,color:#24292f
+    classDef fast fill:#dafbe1,stroke:#1a7f37,color:#24292f
+    classDef slow fill:#fff1e5,stroke:#bc4c00,color:#24292f
+    classDef kernel fill:#ddf4ff,stroke:#0969da,color:#24292f
+    class A entry
+    class D fast
+    class E slow
+    class F kernel
+```
 
 - **Regular** grammars (regex, and GBNF/JSON-Schema rules with no recursion)
   compile to a byte DFA and a dense `tok_next` table -- a decode step is a
