@@ -92,7 +92,9 @@ batch.commit(active_ids, sampled_tokens)         # one call advances it
 ```
 
 ```mermaid
+%%{init: {"theme": "base", "themeVariables": {"primaryColor": "#1f6feb", "primaryTextColor": "#fff", "primaryBorderColor": "#1f6feb", "lineColor": "#8b949e", "actorBkg": "#1f6feb", "actorTextColor": "#fff", "actorBorder": "#1f6feb", "signalColor": "#8b949e", "signalTextColor": "#6e7781", "noteBkgColor": "#fff8c5", "noteBorderColor": "#d4a72c", "labelBoxBkgColor": "#2da44e", "labelBoxBorderColor": "#2da44e", "labelTextColor": "#fff"}}}%%
 sequenceDiagram
+    autonumber
     participant Server as serving loop
     participant Cache as GrammarCache
     participant Batch as ConstraintBatch
@@ -102,12 +104,14 @@ sequenceDiagram
     Server->>Batch: add(request) / evict(request)
     Note over Batch: continuous batching -- requests<br/>join and leave every step
 
+    rect rgba(31, 111, 235, 0.08)
     loop every decode step
         Server->>Batch: apply_mask(active_ids, logits)
         Note right of Batch: one kernel call masks<br/>every active row at once
         Server->>Server: sample from masked logits
         Server->>Batch: commit(active_ids, sampled_tokens)
         Note right of Batch: one kernel call advances<br/>every active row at once
+    end
     end
 ```
 
@@ -129,14 +133,34 @@ con.accepts(vocab.token_bytes.index(b"0"))   # -> True
 ## How it works
 
 ```mermaid
+%%{init: {"theme": "base", "themeVariables": {"primaryColor": "#f6f8fa", "primaryTextColor": "#24292f", "primaryBorderColor": "#8b949e", "lineColor": "#8b949e", "fontSize": "15px"}}}%%
 flowchart TD
-    A["pattern / GBNF / JSON Schema"] --> B["byte automaton<br/>code points lowered to UTF-8 (regex/utf8.py)<br/>alphabet is raw bytes, same as the tokenizer"]
-    B --> C{"regular?<br/>(no recursive rule)"}
-    C -- yes --> D["dense tok_next[state][token] table<br/>(fsa.token_symbols x the tokenizer's byte strings)"]
-    C -- no --> E["config-set pushdown automaton<br/>(grammar.pda)"]
-    E -- "regular sub-loop<br/>spliced out" --> D
-    D --> F["per-step mask / advance<br/>one kernel launch over the whole batch<br/>(torch.ops.bpdecode.*, CPU or CUDA)"]
+    A(["pattern / GBNF / JSON Schema"]) --> B["byte automaton<br/><span style='font-size:12px'>code points lowered to UTF-8 (regex/utf8.py)<br/>alphabet is raw bytes, same as the tokenizer</span>"]
+    B --> C{"regular?<br/><span style='font-size:12px'>no recursive rule</span>"}
+
+    subgraph compile["compiled once per grammar"]
+        C -- yes --> D["dense tok_next[state][token] table<br/><span style='font-size:12px'>fsa.token_symbols x the tokenizer's byte strings</span>"]
+        C -- no --> E["config-set pushdown automaton<br/><span style='font-size:12px'>grammar.pda</span>"]
+        E -- "regular sub-loop<br/>spliced out" --> D
+    end
+
+    subgraph step["every decode step, whole batch"]
+        F["mask / advance<br/><span style='font-size:12px'>one kernel launch -- torch.ops.bpdecode.*, CPU or CUDA</span>"]
+    end
+
+    D --> F
     E -- "structural positions<br/>(few valid tokens)" --> F
+
+    classDef entry fill:#eaeef2,stroke:#57606a,stroke-width:1.5px,color:#24292f
+    classDef fast fill:#dafbe1,stroke:#1a7f37,stroke-width:1.5px,color:#24292f
+    classDef slow fill:#fff1e5,stroke:#bc4c00,stroke-width:1.5px,color:#24292f
+    classDef kernel fill:#ddf4ff,stroke:#0969da,stroke-width:1.5px,color:#24292f
+    class A entry
+    class D fast
+    class E slow
+    class F kernel
+    style compile fill:none,stroke:#d0d7de,stroke-dasharray: 4 3
+    style step fill:none,stroke:#d0d7de,stroke-dasharray: 4 3
 ```
 
 - **Regular** grammars (regex, and GBNF/JSON-Schema rules with no recursion)
