@@ -146,13 +146,13 @@ reasons to reach for bpdecode instead:
   valid-but-dead-end tokens instead of only hard-masking, the same idea as
   "expected future grammaticality" in
   [Grammar-Aligned Decoding](https://arxiv.org/abs/2405.21047) -- isn't
-  something Outlines/XGrammar/llguidance ship. bpdecode's own count-based
-  version of it doesn't work (a documented negative result); a
+  something Outlines/XGrammar/llguidance ship. This repo tried a count-based
+  version first; it doesn't work (a documented negative result). A
   model-probability-weighted version does, at the cost of extra forward
-  passes. It's not novel research -- see GAD and
+  passes. None of this is novel research -- see GAD and
   [Constrained Decoding with Speculative Lookaheads](https://arxiv.org/abs/2412.10418)
-  for the theory -- but it isn't in the three libraries above's production
-  APIs either.
+  for the theory -- but it isn't in the three libraries' production APIs
+  either.
 
 ## Benchmarks
 
