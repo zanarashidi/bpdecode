@@ -35,11 +35,14 @@ automaton-count soft-lookahead bias (`bpdecode.ops.build_lookahead`, a
 negative result) vs. a 1-step model-probability-weighted variant (works --
 first as a single-request proof of concept in `soft_eval_modelweighted.py`,
 then productionised as the batched, KV-cache-reusing
-`bpdecode.lookahead.generate_model_weighted` in `lookahead_model_weighted.py`).
-See `RESULTS.md` for the findings.
+`bpdecode.lookahead.generate_model_weighted` (regex) /
+`generate_model_weighted_cfg` (CFG / JSON Schema) in
+`lookahead_model_weighted.py --grammar-mode regex|cfg`). See `RESULTS.md`
+for the findings.
 
 ## Not yet built
 
 - end-to-end tokens/sec with continuous batching + vLLM
 - C++/CUDA microbenchmarks with [nvbench](https://github.com/NVIDIA/nvbench)
   (`-DBPDECODE_BUILD_BENCH=ON`, requires CUDA)
+- GPU numbers for `bpdecode.lookahead` (CPU-only so far)

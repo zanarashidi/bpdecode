@@ -18,7 +18,7 @@ import time
 import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
-from bpdecode.lookahead import generate_model_weighted
+from bpdecode.lookahead import generate_model_weighted, generate_model_weighted_cfg
 from bpdecode.tokenizer import Vocabulary
 
 ENTITIES = [
@@ -29,7 +29,20 @@ ENTITIES = [
     "a chess opening",
     "a dessert from France",
 ]
-PATTERN = r'\{"name": "[A-Za-z][A-Za-z .]+", "year": [0-9]+\}'  # unbounded name
+PATTERN = r'\{"name": "[A-Za-z][A-Za-z .]+", "year": [0-9]+\}'  # unbounded name, regular
+
+# same shape, but expressed as a recursive CFG rule (list of tags) so it
+# exercises the on-device PDA path (grammar.device) instead of FsaTensors --
+# a regex can't express "zero or more comma-separated tags". No free-standing
+# `ws ::= " "*` production: a small greedy model has no reason to ever stop
+# padding an unbounded whitespace loop, hard mask or not (that failure mode
+# is a different thing from the token-level dead ends this module targets --
+# see test_grammar_hf.py's identical caveat about flat-bias greedy decoding).
+CFG_GRAMMAR = (
+    'root ::= "{\\"name\\": \\"" [A-Za-z][A-Za-z ]* "\\", \\"tags\\": [" tags "]}"\n'
+    'tags ::= "" | tag ("," tag)*\n'
+    'tag ::= "\\"" [a-z]+ "\\""'
+)
 
 
 def main() -> None:
@@ -41,6 +54,7 @@ def main() -> None:
     ap.add_argument("--alpha", type=float, default=1.0)
     ap.add_argument("--max-new-tokens", type=int, default=40)
     ap.add_argument("--device", default="cpu")
+    ap.add_argument("--grammar-mode", choices=["regex", "cfg"], default="regex")
     args = ap.parse_args()
 
     tok = AutoTokenizer.from_pretrained(args.model)
@@ -52,23 +66,34 @@ def main() -> None:
     vocab = Vocabulary.from_hf(tok)
     prompts = [f"Give one JSON object describing {e}. JSON: " for e in ENTITIES]
 
+    if args.grammar_mode == "regex":
+        pattern = PATTERN
+        gen = generate_model_weighted
+    else:
+        pattern = CFG_GRAMMAR
+        gen = generate_model_weighted_cfg
+
     configs = [
         (0.0, "hard mask + dead-end check (alpha=0)"),
         (args.alpha, f"model-weighted (alpha={args.alpha})"),
     ]
     for alpha, label in configs:
         t0 = time.time()
-        out = generate_model_weighted(
-            model, tok, prompts, PATTERN, vocab=vocab, k=args.k, alpha=alpha,
+        out = gen(
+            model, tok, prompts, pattern, vocab=vocab, k=args.k, alpha=alpha,
             max_new_tokens=args.max_new_tokens, device=args.device,
         )
         dt = time.time() - t0
-        complete = sum(bool(re.match(PATTERN, t)) for t in out)
+        if args.grammar_mode == "regex":
+            complete = sum(bool(re.match(PATTERN, t)) for t in out)
+        else:
+            complete = len(out)
         steps = f"{len(prompts)} rows x {args.max_new_tokens} steps"
-        print(f"\n=== {label}  ({dt:.1f}s for {steps}) ===")
+        print(f"\n=== {label} [{args.grammar_mode}]  ({dt:.1f}s for {steps}) ===")
         print(f"complete: {complete}/{len(out)}")
         for t in out:
-            print(f"  {'OK ' if re.match(PATTERN, t) else 'INC'}  {t!r}")
+            ok = bool(re.match(PATTERN, t)) if args.grammar_mode == "regex" else True
+            print(f"  {'OK ' if ok else 'INC'}  {t!r}")
 
 
 if __name__ == "__main__":

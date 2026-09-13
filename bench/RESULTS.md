@@ -238,5 +238,56 @@ when `weight` is `-inf` (`0 * -inf`); scoring is written to avoid that
 without needing a model).
 
 Regex grammars only -- the trick works because `FsaTensors` state is a plain
-int tensor, cheap to repeat/select for branching. A CFG version would need
-the same treatment against `PdaTensors` config-sets; not done.
+int tensor, cheap to repeat/select for branching.
+
+---
+
+# CFG / JSON Schema: the same trick against PdaTensors config-sets
+
+`generate_model_weighted_cfg` / `generate_model_weighted_json_schema` extend
+the above to context-free grammars: same loop, same
+`_score_candidates`/cache-forking machinery, the only change is the state
+representation -- `PdaTensors` config-sets (`grammar.device`, the on-device
+PDA kernel) instead of `FsaTensors` states. A config-set is a fixed-size row
+rather than one int, but it's still a plain tensor, so
+`repeat_interleave(dim=0)` / `batch_select_indices` work exactly the same
+way. Refactored the shared loop out of `generate_model_weighted` into
+`_generate_loop` + a small `_GrammarOps` adapter (`init`/`mask`/`advance`)
+so both entry points share one implementation instead of two copies to keep
+in sync.
+
+Tried with Qwen2.5-0.5B on a grammar a regex can't express -- an object with
+an unbounded, comma-separated list of tags:
+
+```
+root ::= "{\"name\": \"" [A-Za-z][A-Za-z ]* "\", \"tags\": [" tags "]}"
+tags ::= "" | tag ("," tag)*
+tag  ::= "\"" [a-z]+ "\""
+```
+
+6 rows, `k=4`, 30 steps, both `alpha=0` and `alpha=1`: valid structured
+output on every row (several complete within budget --
+`{"name": "Mont Blanc", "tags": ["mountain","alps"]}`), confirming the
+recursive/repeating structure (comma-separated tags) round-trips correctly
+through the branch/select machinery.
+
+One real caveat hit while validating this, worth recording: an early version
+of the demo grammar had a free-standing `ws ::= " "*` production (spaces
+allowed anywhere, the natural way to write "optional whitespace" in GBNF).
+Greedy decoding got stuck padding that loop indefinitely on both `alpha=0`
+and `alpha=1` -- **not** the count-based over-extension bug this module
+exists to fix (whitespace always has a valid continuation, so there's no
+dead end to detect), just a small model with no reason to prefer stopping
+over one more space, the same trap `test_grammar_hf.py` notes for flat-bias
+greedy JSON generation. Dropping the free `ws` production (fixed literal
+spaces instead) fixed it. Lesson: this feature fixes tokens that are
+grammar-valid-now-but-doomed; it is not a general fix for a weak model's own
+greedy preferences, and a permissive grammar can still produce a
+never-ending but always-valid loop.
+
+Cost is real: the PDA mask kernel walks the whole vocabulary per config-set
+with no memo (same trade as `CFGConstraintBatch`, see the main README's
+Limitations), so this CFG path is markedly slower per step than the regex
+one -- ~1s/step for 6 rows x k=4 branches on this CPU, vs regex's ~0.25-0.35s
+for k=6. Fine for the batch sizes and step counts here; not benchmarked
+beyond that. GPU numbers not measured yet.
