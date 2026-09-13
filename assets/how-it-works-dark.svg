@@ -1,4 +1,4 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1080 320" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,Helvetica,Arial,sans-serif">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 570" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,Helvetica,Arial,sans-serif">
   <defs>
     <marker id="arrow-d" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
       <path d="M0,0 L10,5 L0,10 z" fill="#8b949e"/>
@@ -10,61 +10,94 @@
 
   <style>
     .box { stroke-width: 1.4; filter: url(#shadow-d); }
-    .lbl { font-size: 13px; font-weight: 600; fill: #e6edf3; text-anchor: middle; }
-    .sub { font-size: 10.5px; fill: #8b949e; text-anchor: middle; }
+    .lbl { font-size: 12.5px; font-weight: 600; fill: #e6edf3; text-anchor: middle; }
+    .sub { font-size: 10px; fill: #8b949e; text-anchor: middle; }
     .edge { stroke: #6e7681; stroke-width: 1.4; fill: none; marker-end: url(#arrow-d); }
     .edge-dash { stroke-dasharray: 4 3; }
-    .elbl { font-size: 10.5px; fill: #8b949e; text-anchor: middle; }
+    .elbl { font-size: 10px; fill: #8b949e; text-anchor: middle; }
+    .legend-t { font-size: 10.5px; fill: #e6edf3; }
   </style>
 
-  <!-- A: pattern -->
-  <rect class="box" x="14" y="130" width="150" height="56" rx="10" fill="#21262d" stroke="#6e7681"/>
-  <text class="lbl" x="89" y="154">pattern / GBNF</text>
-  <text class="sub" x="89" y="170">/ JSON Schema</text>
+  <!-- A: entry -->
+  <rect class="box" x="340" y="14" width="220" height="54" rx="10" fill="#21262d" stroke="#6e7681"/>
+  <text class="lbl" x="450" y="37">pattern / GBNF /</text>
+  <text class="lbl" x="450" y="52">JSON Schema</text>
 
-  <path class="edge" d="M164,158 L204,158"/>
+  <path class="edge" d="M450,68 L450,86"/>
 
-  <!-- B: byte automaton -->
-  <rect class="box" x="204" y="130" width="150" height="56" rx="10" fill="#161b22" stroke="#30363d"/>
-  <text class="lbl" x="279" y="154">byte automaton</text>
-  <text class="sub" x="279" y="170">regex/utf8.py</text>
+  <!-- decision -->
+  <polygon class="box" points="360,140 450,76 540,140 450,204" fill="#161b22" stroke="#30363d"/>
+  <text class="lbl" x="450" y="136" font-size="12">regular?</text>
+  <text class="sub" x="450" y="151">no recursion</text>
 
-  <path class="edge" d="M354,158 L400,158"/>
+  <!-- yes -> byte DFA -->
+  <path class="edge" d="M360,140 L240,140 L240,250"/>
+  <text class="elbl" x="290" y="132">yes</text>
 
-  <!-- C: diamond -->
-  <polygon class="box" points="480,108 560,158 480,208 400,158" fill="#161b22" stroke="#30363d"/>
-  <text class="lbl" x="480" y="154" font-size="12.5">regular?</text>
-  <text class="sub" x="480" y="170">no recursion</text>
+  <!-- no -> PDA -->
+  <path class="edge" d="M540,140 L690,140 L690,250"/>
+  <text class="elbl" x="610" y="132">no</text>
 
-  <path class="edge" d="M560,158 L640,158 L640,88 L672,88"/>
-  <text class="elbl" x="606" y="80">yes</text>
+  <!-- B: byte DFA -->
+  <rect class="box" x="140" y="250" width="200" height="56" rx="10" fill="#161b22" stroke="#30363d"/>
+  <text class="lbl" x="240" y="274">byte DFA</text>
+  <text class="sub" x="240" y="290">regex/utf8.py</text>
 
-  <path class="edge" d="M480,208 L480,254 L672,254"/>
-  <text class="elbl" x="500" y="246">no</text>
+  <path class="edge" d="M240,306 L240,350"/>
 
-  <!-- D: dense table (fast) -->
-  <rect class="box" x="672" y="60" width="170" height="56" rx="10" fill="#122117" stroke="#3fb950"/>
-  <text class="lbl" x="757" y="84">dense tok_next</text>
-  <text class="sub" x="757" y="100">table (gather)</text>
+  <!-- C: dense table (regular path) -->
+  <rect class="box" x="140" y="350" width="200" height="64" rx="10" fill="#122117" stroke="#3fb950"/>
+  <text class="lbl" x="240" y="374">dense tok_next table</text>
+  <text class="sub" x="240" y="390">gather = one decode step</text>
+  <text class="sub" x="240" y="403">(the regular path)</text>
 
-  <!-- E: PDA (slow) -->
-  <rect class="box" x="672" y="226" width="170" height="56" rx="10" fill="#271d12" stroke="#d29922"/>
-  <text class="lbl" x="757" y="250">pushdown</text>
-  <text class="sub" x="757" y="266">automaton</text>
+  <!-- D: PDA -->
+  <rect class="box" x="560" y="250" width="260" height="56" rx="10" fill="#271d12" stroke="#d29922"/>
+  <text class="lbl" x="690" y="274">pushdown automaton</text>
+  <text class="sub" x="690" y="290">grammar.pda -- masks memoised by config-set</text>
 
-  <!-- E -> D spliced -->
-  <path class="edge edge-dash" d="M757,226 L757,116"/>
-  <text class="elbl" x="833" y="172">sub-loop spliced out</text>
+  <!-- D -> E1 / E2 -->
+  <path class="edge" d="M690,306 L620,306 L620,350"/>
+  <path class="edge" d="M690,306 L760,306 L760,350"/>
+  <text class="elbl" x="690" y="332">GrammarLogitsProcessor backend</text>
 
-  <!-- D -> F -->
-  <path class="edge" d="M842,88 L880,88 L880,150 L900,150"/>
+  <!-- E1: cpu backend -->
+  <rect class="box" x="560" y="350" width="120" height="70" rx="10" fill="#122117" stroke="#3fb950"/>
+  <text class="lbl" x="620" y="373" font-size="11.5">"cpu"</text>
+  <text class="sub" x="620" y="387">per-row CFGConstraint</text>
+  <text class="sub" x="620" y="399">memoised, fast once warm</text>
 
-  <!-- E -> F structural -->
-  <path class="edge" d="M842,254 L880,254 L880,166 L900,166"/>
-  <text class="elbl" x="960" y="210">structural positions</text>
+  <!-- E2: device backend -->
+  <rect class="box" x="700" y="350" width="120" height="70" rx="10" fill="#0d2b42" stroke="#58a6ff"/>
+  <text class="lbl" x="760" y="373" font-size="11.5">"device"</text>
+  <text class="sub" x="760" y="387">CFGConstraintBatch</text>
+  <text class="sub" x="760" y="399">pda_* kernel, no memo</text>
 
-  <!-- F: kernel -->
-  <rect class="box" x="900" y="130" width="160" height="56" rx="10" fill="#0d2b42" stroke="#58a6ff"/>
-  <text class="lbl" x="980" y="154">mask / advance</text>
-  <text class="sub" x="980" y="170">one kernel call</text>
+  <!-- D -> C spliced (dashed) -->
+  <path class="edge edge-dash" d="M560,278 L460,278 L460,382 L340,382"/>
+  <text class="elbl" x="460" y="270">regular sub-loop spliced out</text>
+
+  <!-- F: final kernel -->
+  <rect class="box" x="250" y="472" width="400" height="60" rx="10" fill="#0d2b42" stroke="#58a6ff"/>
+  <text class="lbl" x="450" y="496">mask / advance</text>
+  <text class="sub" x="450" y="512">one launch, whole batch -- CPU or CUDA</text>
+
+  <!-- C -> F -->
+  <path class="edge" d="M240,414 L240,458 L330,458 L330,472"/>
+  <!-- E1 -> F -->
+  <path class="edge" d="M620,420 L620,462 L430,462 L430,472"/>
+  <!-- E2 -> F -->
+  <path class="edge" d="M760,420 L760,448 L540,448 L540,472"/>
+
+  <!-- legend -->
+  <g transform="translate(20,548)">
+    <rect width="13" height="13" rx="3" fill="#21262d" stroke="#6e7681"/>
+    <text class="legend-t" x="19" y="11">compiled once</text>
+    <rect x="150" width="13" height="13" rx="3" fill="#271d12" stroke="#d29922"/>
+    <text class="legend-t" x="169" y="11">pushdown automaton (bounded)</text>
+    <rect x="430" width="13" height="13" rx="3" fill="#122117" stroke="#3fb950"/>
+    <text class="legend-t" x="449" y="11">memoised (dict lookup / gather)</text>
+    <rect x="680" width="13" height="13" rx="3" fill="#0d2b42" stroke="#58a6ff"/>
+    <text class="legend-t" x="699" y="11">kernel launch, no memo</text>
+  </g>
 </svg>
