@@ -13,6 +13,7 @@ fixed-size device arrays. A grammar that needs more silently saturates --
 
 from __future__ import annotations
 
+from collections.abc import Hashable, Sequence
 from dataclasses import dataclass
 
 import torch
@@ -180,3 +181,120 @@ def pda_advance_state(
         g.edge_hi, g.edge_dst, g.edge_callee, g.root_start, g.root_accept,
         g.tok_offsets, g.tok_bytes, g.eos_id, token_ids,
     )
+
+
+_BROKEN = -1  # sentinel row state; matches ConstraintBatch.BROKEN
+
+
+class CFGConstraintBatch:
+    """GPU-resident counterpart to :class:`~bpdecode.batch.ConstraintBatch`,
+    for context-free grammars: a fixed-capacity pool of PDA config-sets, all
+    sharing one :class:`PdaTensors`, masked/advanced with one kernel launch
+    over the whole batch via ``torch.ops.bpdecode.pda_*``.
+
+    Unlike the regular-grammar path, a PDA "state" is a whole config-set
+    tensor (not a scalar), so there is no state-keyed mask memo here -- every
+    step pays a real kernel launch. That is the trade the on-device kernel
+    makes: no per-row Python (``CFGConstraint`` + ``token_trie``), at the cost
+    of losing the CPU path's memoisation. Prefer this over
+    :class:`~bpdecode.grammar.constraint.CFGConstraint` when the batch is
+    large and living on the GPU already; prefer the CPU path for small
+    batches or grammars whose mask memo gets warm and stays hot.
+    """
+
+    def __init__(
+        self,
+        g: PdaTensors,
+        capacity: int,
+        device: torch.device | str | None = None,
+    ) -> None:
+        self.g = g if device is None else g.to(device)
+        self.device = self.g.device
+        self.capacity = capacity
+        self._configs = self.g.init_batch(capacity)
+        self._broken = torch.zeros(capacity, dtype=torch.bool, device=self.device)
+        self._slot_of: dict[Hashable, int] = {}
+        self._free: list[int] = list(reversed(range(capacity)))
+
+    # --- lifecycle -------------------------------------------------------
+    def add(self, seq_id: Hashable) -> int:
+        if seq_id in self._slot_of:
+            raise KeyError(f"sequence {seq_id!r} already in the batch")
+        if not self._free:
+            raise RuntimeError("CFGConstraintBatch is at capacity")
+        slot = self._free.pop()
+        self._slot_of[seq_id] = slot
+        self._configs[slot] = self.g.init_config()
+        self._broken[slot] = False
+        return slot
+
+    def evict(self, seq_id: Hashable) -> None:
+        slot = self._slot_of.pop(seq_id)
+        self._free.append(slot)
+
+    def reset(self, seq_id: Hashable) -> None:
+        slot = self._slot_of[seq_id]
+        self._configs[slot] = self.g.init_config()
+        self._broken[slot] = False
+
+    def __len__(self) -> int:
+        return len(self._slot_of)
+
+    def __contains__(self, seq_id: Hashable) -> bool:
+        return seq_id in self._slot_of
+
+    # --- per-step ------------------------------------------------------
+    def _slots(self, seq_ids: Sequence[Hashable]) -> torch.Tensor:
+        return torch.tensor(
+            [self._slot_of[s] for s in seq_ids], dtype=torch.long, device=self.device
+        )
+
+    def apply_mask(
+        self,
+        seq_ids: Sequence[Hashable],
+        logits: torch.Tensor,
+        neg_inf: float = float("-inf"),
+    ) -> torch.Tensor:
+        """In place: push every grammar-disallowed logit in ``logits``
+        ``[len(seq_ids), vocab]`` to ``neg_inf``, one row per ``seq_ids`` entry.
+        """
+        slots = self._slots(seq_ids)
+        pda_apply_mask_(logits, self.g, self._configs[slots], neg_inf)
+        broken = self._broken[slots]
+        if bool(broken.any()):
+            logits[broken] = neg_inf
+        return logits
+
+    def commit(
+        self, seq_ids: Sequence[Hashable], tokens: torch.Tensor
+    ) -> torch.Tensor:
+        """Advance each named sequence by the token it sampled. Returns an
+        int32 status per sequence (1 = advanced, ``_BROKEN`` = the token was
+        off a valid path, now or on a previous step -- that config-set is
+        left unchanged, and the row stays broken until :meth:`reset`).
+        """
+        slots = self._slots(seq_ids)
+        cfgs = self._configs[slots]
+        ok = pda_advance_state(cfgs, self.g, tokens.to(torch.int32))
+        self._configs[slots] = cfgs
+        self._broken[slots] |= ok == 0
+        status = torch.ones(len(seq_ids), dtype=torch.int32, device=self.device)
+        status[self._broken[slots]] = _BROKEN
+        return status
+
+    # --- queries ------------------------------------------------------
+    def is_complete(self, seq_id: Hashable) -> bool:
+        """True when the string so far is a full match (EOS is allowed).
+
+        Costs a one-row kernel launch (a PDA config-set has no cheap scalar
+        "accepting" test the way a DFA state does).
+        """
+        slot = self._slot_of[seq_id]
+        if self.g.eos_id < 0 or bool(self._broken[slot]):
+            return False
+        probe = torch.zeros(1, self.g.vocab_size, device=self.device)
+        pda_apply_mask_(probe, self.g, self._configs[slot : slot + 1])
+        return bool(probe[0, self.g.eos_id].item() == 0.0)
+
+    def is_broken(self, seq_id: Hashable) -> bool:
+        return bool(self._broken[self._slot_of[seq_id]])

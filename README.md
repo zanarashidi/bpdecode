@@ -120,10 +120,12 @@ con.accepts(vocab.token_bytes.index(b"0"))   # -> True
   dense path.
 - **CUDA**: `csrc/` has the batched kernels (one warp per request,
   `__ballot_sync` token packing) for both paths, validated on an RTX 3090
-  against the CPU reference (`scripts/gpu_check.sh`). The pushdown kernel
-  (`bpdecode.grammar.device`) is a standalone device API -- not yet wired
-  into `CFGConstraint` / `GrammarLogitsProcessor`, which use the (faster,
-  once warm) CPU path today.
+  against the CPU reference (`scripts/gpu_check.sh`). `GrammarLogitsProcessor`
+  picks between two backends: `"cpu"` (per-row `CFGConstraint`, masks
+  memoised on the compiled grammar -- fastest once warm) and `"device"`
+  (`CFGConstraintBatch`, the on-device PDA kernel -- one `torch.ops.bpdecode.pda_*`
+  launch masks/advances the whole batch, no per-row Python or memo, CPU or
+  CUDA). `backend="auto"` (default) follows `device`.
 
 ## Why this instead of Outlines / XGrammar / vLLM's built-in guided decoding
 

@@ -2,10 +2,12 @@
 
 ``RegexLogitsProcessor`` constrains generation to a regex via the batched
 tensor path (:class:`~bpdecode.batch.ConstraintBatch`).  ``GrammarLogitsProcessor``
-constrains it to a context-free grammar or JSON Schema via the per-row CPU
-:class:`~bpdecode.grammar.constraint.CFGConstraint` (masks are memoised on the
-compiled grammar, so the first constrained generation warms the cache and the
-rest are cheap).
+constrains it to a context-free grammar or JSON Schema, via either the
+per-row CPU :class:`~bpdecode.grammar.constraint.CFGConstraint` (masks
+memoised on the compiled grammar -- the first constrained generation warms
+the cache, the rest are cheap) or the on-device PDA kernel
+(:class:`~bpdecode.grammar.device.CFGConstraintBatch`, one kernel launch for
+the whole batch); see its docstring for the trade-off.
 
 Both drop into ``model.generate(..., logits_processor=[lp])``.  Greedy and
 sampling decoding are supported; beam search reorders rows and is not.
@@ -17,6 +19,7 @@ import torch
 
 from .batch import ConstraintBatch
 from .grammar.constraint import CFGConstraint
+from .grammar.device import CFGConstraintBatch, build_pda_tensors
 from .grammar.gbnf import parse_gbnf
 from .grammar.ir import Grammar
 from .grammar.json_schema import json_schema_to_grammar
@@ -121,6 +124,23 @@ class GrammarLogitsProcessor:
     ``grammar`` is GBNF source, a :class:`Grammar`, or -- via
     :meth:`from_json_schema` -- a JSON Schema.  A regular grammar still works
     here but :class:`RegexLogitsProcessor` is far faster for those.
+
+    Two backends:
+
+    - ``"cpu"`` (default off GPU): one :class:`~bpdecode.grammar.constraint.CFGConstraint`
+      per row, Python-side, with masks memoised on the compiled grammar --
+      the first request through a grammar warms the cache, everything after
+      is a dict lookup. Fastest once warm, but the per-row loop is Python.
+    - ``"device"``: :class:`~bpdecode.grammar.device.CFGConstraintBatch`, the
+      on-device PDA kernel -- one ``torch.ops.bpdecode.pda_*`` launch masks
+      or advances the *whole* batch, CPU or CUDA. No per-state memo (a PDA
+      config-set isn't a cheap hashable key the way a DFA state is), so every
+      step pays a real kernel call; wins when the batch is large and already
+      living on the GPU, where avoiding the Python per-row loop matters more
+      than the memo hit rate.
+
+    ``backend="auto"`` (default) picks ``"device"`` when ``device`` is not
+    CPU, ``"cpu"`` otherwise.
     """
 
     def __init__(
@@ -130,12 +150,26 @@ class GrammarLogitsProcessor:
         *,
         root: str = "root",
         neg_inf: float = float("-inf"),
+        device: torch.device | str = "cpu",
+        backend: str = "auto",
     ) -> None:
         g = grammar if isinstance(grammar, Grammar) else parse_gbnf(grammar, root)
         self._vocab = _as_vocabulary(tokenizer)
         self._compiled = CompiledGrammar.build(g)
         self._neg_inf = neg_inf
+        self._device = torch.device(device)
+        if backend == "auto":
+            backend = "cpu" if self._device.type == "cpu" else "device"
+        if backend not in ("cpu", "device"):
+            raise ValueError(f"backend must be 'auto', 'cpu' or 'device', got {backend!r}")
+        self._backend = backend
+
         self._cons: list[CFGConstraint] = []
+        self._pda_tensors = None
+        self._batch: CFGConstraintBatch | None = None
+        self._rows: list[int] = []
+        if backend == "device":
+            self._pda_tensors = build_pda_tensors(self._compiled, self._vocab, self._device)
 
     @classmethod
     def from_json_schema(
@@ -143,10 +177,24 @@ class GrammarLogitsProcessor:
     ) -> GrammarLogitsProcessor:
         return cls(json_schema_to_grammar(schema), tokenizer, **kw)  # type: ignore[arg-type]
 
+    @property
+    def backend(self) -> str:
+        """The resolved backend -- ``"cpu"`` or ``"device"`` (never ``"auto"``)."""
+        return self._backend
+
     def reset(self) -> None:
         self._cons = []
+        self._batch = None
+        self._rows = []
 
     def __call__(
+        self, input_ids: torch.Tensor, scores: torch.Tensor
+    ) -> torch.Tensor:
+        if self._backend == "device":
+            return self._call_device(input_ids, scores)
+        return self._call_cpu(input_ids, scores)
+
+    def _call_cpu(
         self, input_ids: torch.Tensor, scores: torch.Tensor
     ) -> torch.Tensor:
         n_rows = scores.shape[0]
@@ -175,5 +223,42 @@ class GrammarLogitsProcessor:
             scores[row][block] = self._neg_inf
         return scores
 
+    def _call_device(
+        self, input_ids: torch.Tensor, scores: torch.Tensor
+    ) -> torch.Tensor:
+        n_rows = scores.shape[0]
+        if self._batch is None:
+            self._batch = CFGConstraintBatch(
+                self._pda_tensors, capacity=n_rows, device=scores.device
+            )
+            self._rows = list(range(n_rows))
+            for r in self._rows:
+                self._batch.add(r)
+        else:
+            if n_rows != len(self._rows):
+                raise RuntimeError(
+                    "GrammarLogitsProcessor: row count changed (beam search "
+                    "unsupported); call reset() per generation"
+                )
+            last = input_ids[:, -1]
+            self._batch.commit(self._rows, last)
+
+        v = self._pda_tensors.vocab_size
+
+        def _mask(x: torch.Tensor) -> None:
+            if x.shape[1] > v:
+                x[:, v:] = self._neg_inf
+            self._batch.apply_mask(self._rows, x[:, :v], self._neg_inf)
+
+        if scores.dtype == torch.float32:
+            _mask(scores)
+            return scores
+        work = scores.float()
+        _mask(work)
+        scores.copy_(work)
+        return scores
+
     def is_complete(self, row: int = 0) -> bool:
+        if self._backend == "device":
+            return self._batch is not None and self._batch.is_complete(self._rows[row])
         return bool(self._cons) and self._cons[row].is_complete()
