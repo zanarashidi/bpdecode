@@ -28,11 +28,15 @@ JSON-Schema-constrained decoding against
 [XGrammar](https://github.com/mlc-ai/xgrammar) and
 [llguidance](https://github.com/guidance-ai/llguidance).
 
-## `soft_eval.py` / `soft_eval_modelweighted.py` -- soft lookahead
+## `soft_eval.py` / `soft_eval_modelweighted.py` / `lookahead_model_weighted.py` -- soft lookahead
 
 Structured-output generation with `Qwen2.5-0.5B`, hard masking vs. the
-automaton-count soft-lookahead bias (`bpdecode.ops.build_lookahead`) vs. a
-1-step model-probability-weighted variant. See `RESULTS.md` for the findings.
+automaton-count soft-lookahead bias (`bpdecode.ops.build_lookahead`, a
+negative result) vs. a 1-step model-probability-weighted variant (works --
+first as a single-request proof of concept in `soft_eval_modelweighted.py`,
+then productionised as the batched, KV-cache-reusing
+`bpdecode.lookahead.generate_model_weighted` in `lookahead_model_weighted.py`).
+See `RESULTS.md` for the findings.
 
 ## Not yet built
 

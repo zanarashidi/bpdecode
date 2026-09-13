@@ -165,8 +165,11 @@ reasons to reach for bpdecode instead:
   ~50x under llguidance. The cost is a one-time per-grammar warmup.
 - **soft lookahead**: negative result, recorded honestly -- count-based
   continuation weighting over-extends and doesn't beat hard masking. A 1-step
-  model-probability-weighted variant fixes it (`bench/soft_eval_modelweighted.py`)
-  at the cost of extra forward passes per decode step; not productionised.
+  model-probability-weighted variant fixes it (6/6 complete vs 0/6) at the
+  cost of K extra forward passes per decode step; shipped as
+  `bpdecode.lookahead.generate_model_weighted`, a batched generation loop
+  that forks its KV cache per candidate instead of recomputing the prefix
+  (`bench/lookahead_model_weighted.py`).
 
 CUDA kernels validated on an RTX 3090 (`scripts/gpu_check.sh`): differential
 vs the CPU reference + `compute-sanitizer`, clean.
@@ -184,8 +187,14 @@ vs the CPU reference + `compute-sanitizer`, clean.
   JSON-Schema-scale grammars, not verified beyond that.
 - **Soft lookahead:** the count-based version (`build_lookahead` /
   `apply_soft_`) is a documented negative result, not a recommended feature --
-  see the Benchmarks section. The model-probability-weighted variant that does
-  work is an unshipped experiment (`bench/soft_eval_modelweighted.py`).
+  see the Benchmarks section. The model-probability-weighted variant that
+  does work (`bpdecode.lookahead.generate_model_weighted`) is its own
+  generation loop, not a `LogitsProcessor` -- `model.generate()` doesn't hand
+  its KV cache to processors, and reusing the cache is what keeps the cost at
+  K extra forward passes per step instead of K prefix recomputations. Regex
+  grammars only; costs real compute (roughly K times slower decoding)
+  regardless of `alpha`, since the same forward passes also catch
+  token-level dead ends.
 - **CFG `"device"` backend:** `CFGConstraintBatch` has no state-keyed mask
   memo (a PDA config-set isn't a cheap hashable key the way a DFA state is),
   so every step pays a real kernel launch -- the CPU backend's warm memo is

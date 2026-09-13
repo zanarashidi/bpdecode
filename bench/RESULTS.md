@@ -7,7 +7,8 @@ per sequence.
 |---|---|---|---|
 | **regex** vs `outlines_core` | ~17 ms (parity) | dense **~90-140 µs**, beats Outlines on non-trivial patterns | identical allowed sets |
 | **JSON Schema** vs `xgrammar` / `llguidance` | ~1 ms | memoised **~0.6 µs** -- ~14x under xgrammar, ~70x under llguidance | valid, tested vs `jsonschema` |
-| **soft lookahead** | -- | -- | **negative result**: count-based weighting over-extends, doesn't beat hard masking |
+| **soft lookahead (count-based)** | -- | -- | **negative result**: uniform continuation counting over-extends, doesn't beat hard masking |
+| **soft lookahead (model-weighted)** | -- | ~K extra forward passes/step | fixes it -- 6/6 complete vs 0/6; productionised, batched, cache-reusing (`bpdecode.lookahead`) |
 
 The steady-state numbers assume a warm cache: the first request with a new
 grammar pays ~0.2 s, and a token trie is built once per vocabulary (~0.5 s).
@@ -202,5 +203,40 @@ pathology while keeping the token-level structural pruning (a candidate whose
 only continuations are grammar-dead still scores `-inf`, via the same masking
 machinery). The cost is real -- K extra forward passes per decode step -- so
 this is a mode for cases that need the guidance (weak models, tricky
-schemas), not a default. A full k-step version is the natural next step if
-this is worth productionising; not built here.
+schemas), not a default.
+
+---
+
+# lookahead_model_weighted.py -- productionised: batched, cache-reusing
+
+This script's single-request, no-cache proof of concept above doesn't scale:
+every extra forward pass recomputed the *whole prefix*, so cost grew with
+sequence length, not just K. `bpdecode.lookahead.generate_model_weighted` is
+the real version: a custom generation loop (not a `LogitsProcessor` -- HF's
+`generate()` doesn't hand its KV cache to processors) that batches over
+`n` rows and forks the cache once per step
+(`DynamicCache.batch_repeat_interleave(k)`) instead of recomputing it. The
+winning branch's forward pass **is** reused as the next step's state
+(`batch_select_indices` prunes the K-1 losers), so the added cost is exactly
+K forward passes per decode step, not K prefix recomputations.
+
+Same 6 entities, batched in one call (`k=6, alpha=1.0`, CPU, Qwen2.5-0.5B):
+identical output to the single-request version above, 6/6 complete, in
+~10s total for 6 rows x 40 steps either way -- alpha doesn't change the cost
+here, since the dead-end check (see below) always pays the K-branch forward
+regardless of `alpha`.
+
+One correction from productionising it: `alpha=0` is **not** pure hard
+masking. The per-candidate lookahead forward pass also catches token-level
+dead ends (a token that's grammar-valid right now but has zero valid
+continuations at all) the same way the original count-based `build_lookahead`
+did, and that check stays on regardless of `alpha` -- only the *soft
+magnitude* preference among still-viable candidates turns off at `alpha=0`.
+Plain `cand_logit + alpha * weight` would also produce `nan` at `alpha=0`
+when `weight` is `-inf` (`0 * -inf`); scoring is written to avoid that
+(`bpdecode.lookahead._score_candidates`, unit-tested in `tests/test_lookahead.py`
+without needing a model).
+
+Regex grammars only -- the trick works because `FsaTensors` state is a plain
+int tensor, cheap to repeat/select for branching. A CFG version would need
+the same treatment against `PdaTensors` config-sets; not done.
