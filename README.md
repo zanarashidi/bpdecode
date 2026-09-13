@@ -1,5 +1,14 @@
 # bpdecode
 
+![Python](https://img.shields.io/badge/python-3.10%2B-3776AB?logo=python&logoColor=white)
+![PyTorch](https://img.shields.io/badge/PyTorch-2.2%2B-EE4C2C?logo=pytorch&logoColor=white)
+![CUDA](https://img.shields.io/badge/CUDA-optional-76B900?logo=nvidia&logoColor=white)
+![C++](https://img.shields.io/badge/C%2B%2B-20-00599C?logo=cplusplus&logoColor=white)
+![License](https://img.shields.io/badge/license-MIT-yellow)
+
+> **Status: pre-alpha / research code.** APIs may change without notice; this
+> has not been used in production and hasn't had independent review.
+
 **Constrained decoding** for LLM inference: at every step, intersect the model's
 next-token distribution with "which tokens keep generation on a grammar-valid
 path" -- batched across a serving workload, on the GPU that holds the logits.
@@ -11,8 +20,10 @@ soft-lookahead pass is its sum-product version.
 
 ## Install
 
-The wheel compiles `csrc/` and a small torch op extension, so a C++ toolchain
-and `torch` are needed:
+Requirements: Python 3.10+, `torch` >= 2.2, and a C++20 toolchain (the wheel
+compiles `csrc/` and a small torch op extension at install time). CUDA is
+optional -- everything runs CPU-only, including on a laptop; the kernels build
+in automatically if `nvcc` is found.
 
 ```bash
 pip install torch                    # CPU: --index-url https://download.pytorch.org/whl/cpu
@@ -71,6 +82,19 @@ batch.commit(active_ids, sampled_tokens)         # one call advances it
 
 See [`examples/`](examples/).
 
+**No model, no tensors:** `RegexConstraint` is the plain-Python automaton --
+it never touches a tensor at runtime, even though the package install still
+needs `torch` present. Useful for testing or embedding the constraint logic
+somewhere else:
+
+```python
+from bpdecode import RegexConstraint, Vocabulary
+
+vocab = Vocabulary.from_tokens(["a", "b", "ab", "0", "1", "<eos>"], eos_id=5)
+con = RegexConstraint(r"[01]+", vocab)
+con.accepts(vocab.token_bytes.index(b"0"))   # -> True
+```
+
 ## How it works
 
 ```
@@ -101,6 +125,23 @@ per-step mask / advance    one kernel launch over the batch (torch.ops.bpdecode.
   into `CFGConstraint` / `GrammarLogitsProcessor`, which use the (faster,
   once warm) CPU path today.
 
+## Why this instead of Outlines / XGrammar / vLLM's built-in guided decoding
+
+Outlines, XGrammar, and llguidance are mature, well-tested libraries doing the
+same core job (constrained decoding via a Rust/C++ FSM), and for most use
+cases they're the safer choice today given this project's status above. Two
+reasons to reach for bpdecode instead:
+
+- it's **batched natively** -- `ConstraintBatch` masks/advances an entire
+  serving batch in one kernel call, with a shared compiled grammar and an
+  adaptive mask cache, rather than one matcher object per request; and once a
+  grammar is warm it's faster per token than any of the three (see below).
+- the **soft-lookahead angle** -- steering the model away from
+  valid-but-dead-end tokens instead of only hard-masking -- is something none
+  of those libraries do. The count-based version of it doesn't work (a
+  documented negative result); a model-probability-weighted version does, at
+  the cost of extra forward passes. Neither is available anywhere else.
+
 ## Benchmarks
 
 `bench/RESULTS.md`. Against `outlines_core`, `xgrammar`, `llguidance` on a
@@ -117,6 +158,25 @@ per-step mask / advance    one kernel launch over the batch (torch.ops.bpdecode.
 
 CUDA kernels validated on an RTX 3090 (`scripts/gpu_check.sh`): differential
 vs the CPU reference + `compute-sanitizer`, clean.
+
+## Limitations
+
+- **Regex:** no anchors, backreferences, or lookaround.
+- **JSON Schema:** objects emit properties in schema order -- every string
+  produced validates, but not every valid property ordering is producible.
+  `minimum` / `maximum` on numbers aren't enforced (not expressible as a
+  grammar).
+- **CFG / pushdown:** the config-set is bounded (8 alternative stacks x 32
+  frames deep) to keep it a fixed size. A pathologically ambiguous or deeply
+  recursive grammar silently saturates rather than raising -- fine for
+  JSON-Schema-scale grammars, not verified beyond that.
+- **Soft lookahead:** the count-based version (`build_lookahead` /
+  `apply_soft_`) is a documented negative result, not a recommended feature --
+  see the Benchmarks section. The model-probability-weighted variant that does
+  work is an unshipped experiment (`bench/soft_eval_modelweighted.py`).
+- The on-device PDA kernel (`bpdecode.grammar.device`) exists and is
+  GPU-validated but isn't wired into `CFGConstraint` / `GrammarLogitsProcessor`
+  yet -- see "How it works" above.
 
 ## Development
 
