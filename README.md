@@ -74,6 +74,10 @@ schema = {
 }
 gp = GrammarLogitsProcessor.from_json_schema(schema, tok)
 # -> {"name": "Rust", "year": 2010, "compiled": true}
+
+# large batch already on the GPU: route through the on-device PDA kernel
+# instead of a per-row CPU CFGConstraint (see "How it works" below)
+gp_gpu = GrammarLogitsProcessor.from_json_schema(schema, tok, device="cuda")
 ```
 
 **vLLM:** `from bpdecode.vllm import RegexLogitsProcessorFactory` -- pass
@@ -182,9 +186,11 @@ vs the CPU reference + `compute-sanitizer`, clean.
   `apply_soft_`) is a documented negative result, not a recommended feature --
   see the Benchmarks section. The model-probability-weighted variant that does
   work is an unshipped experiment (`bench/soft_eval_modelweighted.py`).
-- The on-device PDA kernel (`bpdecode.grammar.device`) exists and is
-  GPU-validated but isn't wired into `CFGConstraint` / `GrammarLogitsProcessor`
-  yet -- see "How it works" above.
+- **CFG `"device"` backend:** `CFGConstraintBatch` has no state-keyed mask
+  memo (a PDA config-set isn't a cheap hashable key the way a DFA state is),
+  so every step pays a real kernel launch -- the CPU backend's warm memo is
+  still faster for small batches or long-running grammars. `"device"` wins
+  when the batch is large and already living on the GPU.
 
 ## Development
 
