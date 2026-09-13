@@ -18,6 +18,17 @@ of a CUDA loopy belief-propagation project: reachability in a constraint
 automaton is boolean message-passing to a fixpoint, and the (experimental)
 soft-lookahead pass is its sum-product version.
 
+## Contents
+
+- [Install](#install)
+- [Use it](#use-it)
+- [How it works](#how-it-works)
+- [Why this instead of Outlines / XGrammar / vLLM's built-in guided decoding](#why-this-instead-of-outlines--xgrammar--vllms-built-in-guided-decoding)
+- [Benchmarks](#benchmarks)
+- [Limitations](#limitations)
+- [Development](#development)
+- [License](#license)
+
 ## Install
 
 Requirements: Python 3.10+, `torch` >= 2.2, and a C++20 toolchain (the wheel
@@ -80,6 +91,26 @@ batch.apply_mask(active_ids, logits)             # one call masks the whole batc
 batch.commit(active_ids, sampled_tokens)         # one call advances it
 ```
 
+```mermaid
+sequenceDiagram
+    participant Server as serving loop
+    participant Cache as GrammarCache
+    participant Batch as ConstraintBatch
+
+    Server->>Cache: get(pattern)
+    Cache-->>Server: shared compiled grammar (compiled once)
+    Server->>Batch: add(request) / evict(request)
+    Note over Batch: continuous batching -- requests<br/>join and leave every step
+
+    loop every decode step
+        Server->>Batch: apply_mask(active_ids, logits)
+        Note right of Batch: one kernel call masks<br/>every active row at once
+        Server->>Server: sample from masked logits
+        Server->>Batch: commit(active_ids, sampled_tokens)
+        Note right of Batch: one kernel call advances<br/>every active row at once
+    end
+```
+
 See [`examples/`](examples/).
 
 **No model, no tensors:** `RegexConstraint` is the plain-Python automaton --
@@ -97,18 +128,15 @@ con.accepts(vocab.token_bytes.index(b"0"))   # -> True
 
 ## How it works
 
-```
-pattern / grammar / JSON Schema
-   │  regex.compile (Thompson NFA -> subset construction)
-   │  grammar.gbnf / grammar.json_schema -> rule NFAs
-   ▼
-byte automaton            code points lowered to UTF-8 (regex/utf8.py); alphabet is raw bytes
-   │  fsa.token_symbols  ×  the tokenizer's byte strings
-   ▼
-token-level table         tok_next[state][token]  (dense, or lazy for a CFG's pushdown)
-   │
-   ▼
-per-step mask / advance    one kernel launch over the batch (torch.ops.bpdecode.*)
+```mermaid
+flowchart TD
+    A["pattern / GBNF / JSON Schema"] --> B["byte automaton<br/>code points lowered to UTF-8 (regex/utf8.py)<br/>alphabet is raw bytes, same as the tokenizer"]
+    B --> C{"regular?<br/>(no recursive rule)"}
+    C -- yes --> D["dense tok_next[state][token] table<br/>(fsa.token_symbols x the tokenizer's byte strings)"]
+    C -- no --> E["config-set pushdown automaton<br/>(grammar.pda)"]
+    E -- "regular sub-loop<br/>spliced out" --> D
+    D --> F["per-step mask / advance<br/>one kernel launch over the whole batch<br/>(torch.ops.bpdecode.*, CPU or CUDA)"]
+    E -- "structural positions<br/>(few valid tokens)" --> F
 ```
 
 - **Regular** grammars (regex, and GBNF/JSON-Schema rules with no recursion)
