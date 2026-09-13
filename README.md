@@ -165,10 +165,16 @@ reasons to reach for bpdecode instead:
   adaptive mask cache, rather than one matcher object per request; and once a
   grammar is warm it's faster per token than any of the three (see below).
 - the **soft-lookahead angle** -- steering the model away from
-  valid-but-dead-end tokens instead of only hard-masking -- is something none
-  of those libraries do. The count-based version of it doesn't work (a
-  documented negative result); a model-probability-weighted version does, at
-  the cost of extra forward passes. Neither is available anywhere else.
+  valid-but-dead-end tokens instead of only hard-masking, the same idea as
+  "expected future grammaticality" in
+  [Grammar-Aligned Decoding](https://arxiv.org/abs/2405.21047) -- isn't
+  something Outlines/XGrammar/llguidance ship. bpdecode's own count-based
+  version of it doesn't work (a documented negative result); a
+  model-probability-weighted version does, at the cost of extra forward
+  passes. It's not novel research -- see GAD and
+  [Constrained Decoding with Speculative Lookaheads](https://arxiv.org/abs/2412.10418)
+  for the theory -- but it isn't in the three libraries above's production
+  APIs either.
 
 ## Benchmarks
 
