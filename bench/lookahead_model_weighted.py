@@ -55,6 +55,11 @@ def main() -> None:
     ap.add_argument("--max-new-tokens", type=int, default=40)
     ap.add_argument("--device", default="cpu")
     ap.add_argument("--grammar-mode", choices=["regex", "cfg"], default="regex")
+    ap.add_argument(
+        "--repeat", type=int, default=1,
+        help="duplicate the entity list this many times, to test whether a "
+        "bigger batch amortizes per-step launch overhead better on GPU",
+    )
     args = ap.parse_args()
 
     tok = AutoTokenizer.from_pretrained(args.model)
@@ -64,7 +69,8 @@ def main() -> None:
         .to(args.device)
     )
     vocab = Vocabulary.from_hf(tok)
-    prompts = [f"Give one JSON object describing {e}. JSON: " for e in ENTITIES]
+    entities = ENTITIES * args.repeat
+    prompts = [f"Give one JSON object describing {e}. JSON: " for e in entities]
 
     if args.grammar_mode == "regex":
         pattern = PATTERN
@@ -89,11 +95,15 @@ def main() -> None:
         else:
             complete = len(out)
         steps = f"{len(prompts)} rows x {args.max_new_tokens} steps"
-        print(f"\n=== {label} [{args.grammar_mode}]  ({dt:.1f}s for {steps}) ===")
+        per_step_ms = dt / args.max_new_tokens * 1000
+        header = f"{label} [{args.grammar_mode}]  ({dt:.1f}s for {steps}, {per_step_ms:.1f}ms/step)"
+        print(f"\n=== {header} ===")
         print(f"complete: {complete}/{len(out)}")
-        for t in out:
+        for t in out[:6]:
             ok = bool(re.match(PATTERN, t)) if args.grammar_mode == "regex" else True
             print(f"  {'OK ' if ok else 'INC'}  {t!r}")
+        if len(out) > 6:
+            print(f"  ... ({len(out) - 6} more rows omitted)")
 
 
 if __name__ == "__main__":
