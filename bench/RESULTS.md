@@ -290,4 +290,26 @@ with no memo (same trade as `CFGConstraintBatch`, see the main README's
 Limitations), so this CFG path is markedly slower per step than the regex
 one -- ~1s/step for 6 rows x k=4 branches on this CPU, vs regex's ~0.25-0.35s
 for k=6. Fine for the batch sizes and step counts here; not benchmarked
-beyond that. GPU numbers not measured yet.
+beyond that.
+
+## GPU (RTX 3090, `--device cuda`)
+
+Same 6 rows, same grammars, both `alpha` values, output identical to CPU:
+
+| grammar | k | per-step (GPU) | per-step (CPU) |
+|---|---:|---:|---:|
+| regex | 6 | **~55-90 ms** | ~250-340 ms |
+| CFG (tags) | 4 | **~870-880 ms** | ~1000 ms |
+
+Regex speeds up meaningfully on GPU, in line with expectations (a real
+forward-pass-dominated workload). **CFG barely moves** -- the PDA path's
+GPU number is close to its CPU one, unlike every other CUDA-backed
+operation in this repo (`regex_mask.py` / `json_schema_mask.py` show clean
+GPU wins elsewhere in `RESULTS.md`). Likely cause, not confirmed: this loop
+does many small tensor ops per step (`topk`, `gather`, `cat`, `arange`,
+the mask kernel itself over a small `n*k` batch) that are each a separate
+CUDA kernel launch; at `n=6, k=4` there may not be enough parallel work per
+launch to amortize launch overhead, and/or the no-memo PDA mask kernel is
+the actual bottleneck regardless of device (it does the same per-vocab walk
+either way). Worth profiling before trusting either explanation -- recorded
+here as an honest number, not a validated diagnosis.

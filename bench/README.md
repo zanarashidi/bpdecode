@@ -45,4 +45,5 @@ for the findings.
 - end-to-end tokens/sec with continuous batching + vLLM
 - C++/CUDA microbenchmarks with [nvbench](https://github.com/NVIDIA/nvbench)
   (`-DBPDECODE_BUILD_BENCH=ON`, requires CUDA)
-- GPU numbers for `bpdecode.lookahead` (CPU-only so far)
+- root-causing why the CFG lookahead path doesn't speed up on GPU the way
+  regex does (see `RESULTS.md`'s GPU section)
