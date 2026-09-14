@@ -197,10 +197,12 @@ vs the CPU reference + `compute-sanitizer`, clean.
   K prefix recomputations. Costs real compute (roughly K times slower
   decoding) regardless of `alpha`, since the same forward passes also catch
   token-level dead ends. On an RTX 3090, regex sped up meaningfully over CPU
-  (~55-90 ms/step vs ~250-340 ms); the CFG path (no mask memo -- see below)
-  barely did (~870-880 ms vs ~1000 ms), which looks like launch-overhead- or
-  kernel-bound behavior at this batch size rather than a GPU win, not yet
-  root-caused -- see `bench/RESULTS.md`.
+  and scales cleanly with batch size (~55-90 ms/step, flat from n=6 to
+  n=48). The CFG path (no mask memo -- see below) does not: ~870-880 ms/step
+  at n=6, *worse* (~1310-1330 ms) at n=48 -- the no-memo PDA mask kernel's
+  real per-token simulation is warp-divergent and its cost scales with batch
+  size regardless of device, unlike the dense regex gather. See
+  `bench/RESULTS.md` for the batch-scaling test that pins this down.
 - **CFG `"device"` backend:** `CFGConstraintBatch` has no state-keyed mask
   memo (a PDA config-set isn't a cheap hashable key the way a DFA state is),
   so every step pays a real kernel launch -- the CPU backend's warm memo is

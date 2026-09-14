@@ -45,5 +45,7 @@ for the findings.
 - end-to-end tokens/sec with continuous batching + vLLM
 - C++/CUDA microbenchmarks with [nvbench](https://github.com/NVIDIA/nvbench)
   (`-DBPDECODE_BUILD_BENCH=ON`, requires CUDA)
-- root-causing why the CFG lookahead path doesn't speed up on GPU the way
-  regex does (see `RESULTS.md`'s GPU section)
+- on-device dense-table splicing for the PDA kernel (`grammar/regular.py`'s
+  trick, ported to `grammar.device`) -- confirmed via a batch-scaling test
+  as the real fix for why the CFG lookahead path doesn't speed up on GPU the
+  way regex does (see `RESULTS.md`'s GPU section)

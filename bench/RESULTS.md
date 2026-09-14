@@ -294,7 +294,7 @@ beyond that.
 
 ## GPU (RTX 3090, `--device cuda`)
 
-Same 6 rows, same grammars, both `alpha` values, output identical to CPU:
+6 rows, both `alpha` values, output identical to CPU:
 
 | grammar | k | per-step (GPU) | per-step (CPU) |
 |---|---:|---:|---:|
@@ -302,14 +302,24 @@ Same 6 rows, same grammars, both `alpha` values, output identical to CPU:
 | CFG (tags) | 4 | **~870-880 ms** | ~1000 ms |
 
 Regex speeds up meaningfully on GPU, in line with expectations (a real
-forward-pass-dominated workload). **CFG barely moves** -- the PDA path's
-GPU number is close to its CPU one, unlike every other CUDA-backed
-operation in this repo (`regex_mask.py` / `json_schema_mask.py` show clean
-GPU wins elsewhere in `RESULTS.md`). Likely cause, not confirmed: this loop
-does many small tensor ops per step (`topk`, `gather`, `cat`, `arange`,
-the mask kernel itself over a small `n*k` batch) that are each a separate
-CUDA kernel launch; at `n=6, k=4` there may not be enough parallel work per
-launch to amortize launch overhead, and/or the no-memo PDA mask kernel is
-the actual bottleneck regardless of device (it does the same per-vocab walk
-either way). Worth profiling before trusting either explanation -- recorded
-here as an honest number, not a validated diagnosis.
+forward-pass-dominated workload). **CFG barely moves.**
+
+**Batch-scaling follow-up** (`--repeat 8`, n=48 instead of 6, same box):
+regex stayed flat at **~67-90 ms/step** -- the GPU absorbs 8x the batch for
+free, confirming it's genuinely forward-pass-dominated and scales the way
+you'd want. CFG got **worse**, not better: **~1310-1330 ms/step** at n=48
+vs ~870-880 ms at n=6. That rules out launch-overhead (which would have
+amortized away at a bigger batch) and confirms the no-memo PDA mask kernel
+itself is the bottleneck -- its cost scales with batch size regardless of
+device.
+
+**Why the PDA kernel doesn't get the same GPU win as the dense regex path:**
+the dense `tok_next` gather is a single branch-free vectorized lookup; the
+PDA kernel does real per-token simulation (byte-range checks and stack
+push/pop per config, control flow that differs per token and per config) --
+classic warp-divergence territory, and orthogonal to which device it runs
+on. The real fix is the same one the CPU path already uses
+(`grammar/regular.py`): splice non-recursive sub-loops (`[a-z]+` etc.) out
+to a dense precomputed table so most steps hit a cheap gather instead of
+the full PDA walk, on-device. Not done -- same scope of work as building
+the PDA kernel itself, not a quick follow-up.
