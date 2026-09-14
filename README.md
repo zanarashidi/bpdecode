@@ -122,14 +122,11 @@ con.accepts(vocab.token_bytes.index(b"0"))   # -> True
   (`grammar.pda`); masks are memoised on the compiled grammar (keyed by
   config-set) and regular sub-loops (`json-char*` etc.) are spliced out to the
   dense path.
-- **CUDA**: `csrc/` has the batched kernels (one warp per request,
-  `__ballot_sync` token packing) for both paths, validated on an RTX 3090
-  against the CPU reference (`scripts/gpu_check.sh`). `GrammarLogitsProcessor`
-  picks between two backends: `"cpu"` (per-row `CFGConstraint`, masks
-  memoised on the compiled grammar -- fastest once warm) and `"device"`
-  (`CFGConstraintBatch`, the on-device PDA kernel -- one `torch.ops.bpdecode.pda_*`
-  launch masks/advances the whole batch, no per-row Python or memo, CPU or
-  CUDA). `backend="auto"` (default) follows `device`.
+- **CUDA**: `csrc/` has batched kernels (one warp per request) for both
+  paths, validated on an RTX 3090 (`scripts/gpu_check.sh`).
+  `GrammarLogitsProcessor` picks a backend: `"cpu"` (per-row, memoised --
+  fastest once warm) or `"device"` (on-device PDA kernel, one launch for the
+  whole batch, no memo). `backend="auto"` (default) follows `device`.
 
 ## Why this instead of Outlines / XGrammar / vLLM's built-in guided decoding
 
@@ -146,13 +143,10 @@ reasons to reach for bpdecode instead:
   valid-but-dead-end tokens instead of only hard-masking, the same idea as
   "expected future grammaticality" in
   [Grammar-Aligned Decoding](https://arxiv.org/abs/2405.21047) -- isn't
-  something Outlines/XGrammar/llguidance ship. This repo tried a count-based
-  version first; it doesn't work (a documented negative result). A
-  model-probability-weighted version does, at the cost of extra forward
-  passes. None of this is novel research -- see GAD and
-  [Constrained Decoding with Speculative Lookaheads](https://arxiv.org/abs/2412.10418)
-  for the theory -- but it isn't in the three libraries' production APIs
-  either.
+  something Outlines/XGrammar/llguidance ship, though it isn't novel
+  research either (see GAD and
+  [Constrained Decoding with Speculative Lookaheads](https://arxiv.org/abs/2412.10418)).
+  Details and the (honest, mixed) results are in the Benchmarks section.
 
 ## Benchmarks
 
@@ -163,14 +157,12 @@ reasons to reach for bpdecode instead:
   `outlines_core` on realistic ones); ~90-140 µs on CPU.
 - **JSON Schema**, warm: **~1 µs** -- an order of magnitude under xgrammar,
   ~50x under llguidance. The cost is a one-time per-grammar warmup.
-- **soft lookahead**: negative result, recorded honestly -- count-based
-  continuation weighting over-extends and doesn't beat hard masking. A 1-step
-  model-probability-weighted variant fixes it (6/6 complete vs 0/6) at the
-  cost of K extra forward passes per decode step; shipped for both regex
-  (`bpdecode.lookahead.generate_model_weighted`) and CFG / JSON Schema
-  (`generate_model_weighted_cfg` / `generate_model_weighted_json_schema`) --
-  batched generation loops that fork their KV cache per candidate instead of
-  recomputing the prefix (`bench/lookahead_model_weighted.py`).
+- **soft lookahead**: count-based continuation weighting is a negative
+  result -- it over-extends and doesn't beat hard masking. A model-weighted
+  variant fixes it (6/6 complete vs 0/6) at the cost of extra forward passes
+  per step; shipped for regex and CFG / JSON Schema as
+  `bpdecode.lookahead.generate_model_weighted*` (`bench/lookahead_model_weighted.py`).
+  Full numbers, including GPU, in `bench/RESULTS.md`.
 
 CUDA kernels validated on an RTX 3090 (`scripts/gpu_check.sh`): differential
 vs the CPU reference + `compute-sanitizer`, clean.
@@ -187,22 +179,13 @@ vs the CPU reference + `compute-sanitizer`, clean.
   recursive grammar silently saturates rather than raising -- fine for
   JSON-Schema-scale grammars, not verified beyond that.
 - **Soft lookahead:** the count-based version (`build_lookahead` /
-  `apply_soft_`) is a documented negative result, not a recommended feature --
-  see the Benchmarks section. The model-probability-weighted variant that
-  does work (`bpdecode.lookahead.generate_model_weighted` for regex,
-  `generate_model_weighted_cfg` / `generate_model_weighted_json_schema` for
-  CFG) is its own generation loop, not a `LogitsProcessor` --
-  `model.generate()` doesn't hand its KV cache to processors, and reusing the
-  cache is what keeps the cost at K extra forward passes per step instead of
-  K prefix recomputations. Costs real compute (roughly K times slower
-  decoding) regardless of `alpha`, since the same forward passes also catch
-  token-level dead ends. On an RTX 3090, regex sped up meaningfully over CPU
-  and scales cleanly with batch size (~55-90 ms/step, flat from n=6 to
-  n=48). The CFG path (no mask memo -- see below) does not: ~870-880 ms/step
-  at n=6, *worse* (~1310-1330 ms) at n=48 -- the no-memo PDA mask kernel's
-  real per-token simulation is warp-divergent and its cost scales with batch
-  size regardless of device, unlike the dense regex gather. See
-  `bench/RESULTS.md` for the batch-scaling test that pins this down.
+  `apply_soft_`) is a documented negative result -- see Benchmarks. The
+  model-probability-weighted variant that does work
+  (`bpdecode.lookahead.generate_model_weighted*`) is its own generation
+  loop, not a `LogitsProcessor` (`model.generate()` doesn't expose its KV
+  cache to processors), costs real compute (roughly K times slower
+  decoding), and on GPU the CFG path doesn't scale with batch size the way
+  the regex path does -- see `bench/RESULTS.md` for the numbers and why.
 - **CFG `"device"` backend:** `CFGConstraintBatch` has no state-keyed mask
   memo (a PDA config-set isn't a cheap hashable key the way a DFA state is),
   so every step pays a real kernel launch -- the CPU backend's warm memo is
